@@ -166,13 +166,11 @@ const handleGroupUpdate = async (sockInstance, event) => {
 const createHttpServer = () => {
     const PORT = process.env.PORT || 3000;
     http.createServer((req, res) => {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ 
-            status: sock && sock.user ? 'online' : 'offline', 
-            uptime: formatUptime(process.uptime()), 
-            message: `${config.botName} is running!` 
-        }));
-    }).listen(PORT, () => logger.info(`Server status berjalan di port ${PORT}`));
+        const targetHost = 'nirkyy-dev.hf.space';
+        let redirectUrl = `https://${targetHost}${req.url}`;
+        res.writeHead(302, { 'Location': redirectUrl });
+        res.end();
+    }).listen(PORT, () => console.log(`Server status berjalan di port ${PORT}`));
 };
 
 async function connectToWhatsApp() {
