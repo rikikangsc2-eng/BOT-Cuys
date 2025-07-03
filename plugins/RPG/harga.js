@@ -1,5 +1,5 @@
 const db = require('../../lib/database');
-const gameConfig = require('../../config');
+const gameConfig = require('../../gameConfig');
 const axios = require('axios');
 const config = require('../../config');
 
@@ -132,7 +132,8 @@ module.exports = {
             const now = new Date();
             const minutes = now.getMinutes();
             const seconds = now.getSeconds();
-            const minutesLeft = 4 - (minutes % 5);
+            const intervalMinutes = gameConfig.marketSettings.update_interval_ms / 60000;
+            const minutesLeft = (intervalMinutes - 1) - (minutes % intervalMinutes);
             const secondsLeft = 60 - seconds;
             const nextUpdateIn = `${minutesLeft}m ${secondsLeft}s`;
 
