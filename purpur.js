@@ -420,6 +420,7 @@ async function start() {
     console.log(chalk.gray(`by ${config.ownerName}\n`));
     
     await synchronizeDataFromRemote();
+    db.reinit();
     
     loadPlugins();
     await connectToWhatsApp();
