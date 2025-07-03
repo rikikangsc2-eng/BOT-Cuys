@@ -12,6 +12,7 @@ const activeBombGames = new LRUCache({ max: 500, ttl: 1000 * 60 * 60 });
 const groupMetadataCache = new LRUCache({ max: 100, ttl: 1000 * 60 * 5 });
 const activeDungeons = new LRUCache({ max: 100, ttl: 1000 * 60 * 30 });
 const activeSambungKataGames = new LRUCache({ max: 500, ttl: 1000 * 60 * 15 });
+const activeTttGames = new LRUCache({ max: 100, ttl: 1000 * 60 * 15 });
 
 const checkLevelUp = async (sock, message, user) => {
     if (!user.level || !user.xp) {
@@ -289,7 +290,7 @@ const handler = async (sock, m) => {
         try {
             const activeEvents = getActiveEvents();
             const handlerUtils = { checkLevelUp };
-            plugin.run(sock, message, args, { activeGames, groupMetadata, activeBombGames, activeDungeons, activeSambungKataGames, activeEvents, handler: handlerUtils });
+            plugin.run(sock, message, args, { activeGames, groupMetadata, activeBombGames, activeDungeons, activeSambungKataGames, activeTttGames, activeEvents, handler: handlerUtils });
             
             const questType = Array.isArray(plugin.command) ? plugin.command[0] : plugin.command;
             const trackableQuests = ['berburu', 'duel', 'meracik', 'rampok', 'ngemis'];
