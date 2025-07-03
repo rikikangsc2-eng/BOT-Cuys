@@ -68,7 +68,6 @@ function generateSingleItemChartHtml(itemName, itemSymbol, historyData, colors) 
     return `
     <html>
     <head>
-        <meta name="viewport" content="width=700, initial-scale=1.0">
         <style>
             body { font-family: sans-serif; background-color: #0d1117; color: #c9d1d9; margin: 0; }
             .chart-container { background-color: #161b22; border: 1px solid #30363d; border-radius: 10px; padding: 20px; box-sizing: border-box; }
@@ -94,10 +93,6 @@ module.exports = {
     command: 'harga',
     description: 'Melihat grafik harga pasar. Gunakan: .harga <emas|iron|bara>',
     run: async (sock, message, args) => {
-        if (!config.rapidApiKey || config.rapidApiKey === "YOUR_API_KEY_HERE") {
-            return message.reply("Kunci API untuk RapidAPI belum diatur di file config.js. Silakan hubungi Owner.");
-        }
-        
         const itemMap = { 
             emas: { name: 'Emas', symbol: '🪙', colors: { bullish: '#26a69a', bearish: '#ef5350' } }, 
             iron: { name: 'Iron', symbol: '🔩', colors: { bullish: '#26a69a', bearish: '#ef5350' } }, 
@@ -121,16 +116,13 @@ module.exports = {
 
             const response = await axios({
                 method: 'post',
-                url: 'https://html-to-image2.p.rapidapi.com/html-to-image',
+                url: 'https://nirkyy-api.hf.space/api/htmltoimg',
                 headers: {
                     'Content-Type': 'application/json',
-                    'x-rapidapi-host': 'html-to-image2.p.rapidapi.com',
-                    'x-rapidapi-key': config.rapidApiKey
+                    'accept': 'image/png'
                 },
                 data: { 
-                    html: htmlContent,
-                    viewport_width: 700,
-                    viewport_height: 350
+                    html: htmlContent
                 },
                 responseType: 'arraybuffer'
             });
@@ -156,7 +148,7 @@ module.exports = {
             
         } catch (error) {
             console.error('Error pada plugin harga:', error.response ? error.response.data.toString() : error.message);
-            await message.reply('Terjadi kesalahan saat membuat laporan pasar. Mungkin API Key tidak valid atau data belum cukup.');
+            await message.reply('Terjadi kesalahan saat membuat laporan pasar. Mungkin API sedang tidak aktif atau data belum cukup.');
         }
     }
 };
