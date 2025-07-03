@@ -5,7 +5,7 @@ const pm2Options = {
     script: './purpur.js',
     name: config.botName || 'NirKyy-Bot',
     exec_mode: 'fork',
-    max_memory_restart: '400M'
+    max_memory_restart: '350M'
 };
 
 pm2.connect(function(err) {
