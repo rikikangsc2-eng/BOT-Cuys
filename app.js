@@ -8,15 +8,36 @@ const PORT = process.env.PORT || 3000;
 
 const sessionPath = path.resolve(__dirname, 'session');
 const dbFilePath = path.resolve(__dirname, 'database', 'storage.db');
+const credsPath = path.resolve(sessionPath, 'creds.json');
 
-app.get('/sinkronsesi', (req, res) => {
-  const credsPath = path.resolve(sessionPath, 'creds.json');
-  if (fs.existsSync(credsPath)) {
-    res.setHeader('Content-Type', 'application/json');
-    res.sendFile(credsPath);
-  } else {
-    logger.error('[HTTP] Permintaan /sinkronsesi gagal: creds.json tidak ditemukan.');
-    res.status(404).send('File creds.json tidak ditemukan.');
+const readAndValidateCreds = async () => {
+  const MAX_READ_ATTEMPTS = 3;
+  const RETRY_DELAY_MS = 200;
+  
+  for (let i = 0; i < MAX_READ_ATTEMPTS; i++) {
+    try {
+      if (!fs.existsSync(credsPath)) throw new Error("File creds.json tidak ada.");
+      const fileContent = fs.readFileSync(credsPath, 'utf-8');
+      const jsonData = JSON.parse(fileContent);
+      return jsonData;
+    } catch (error) {
+      if (i === MAX_READ_ATTEMPTS - 1) {
+        logger.error(`Gagal membaca/mem-parse creds.json setelah ${MAX_READ_ATTEMPTS} percobaan.`);
+        throw error;
+      }
+      logger.warn(`Gagal membaca creds.json (percobaan ${i + 1}), mungkin sedang ditulis. Mencoba lagi...`);
+      await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS));
+    }
+  }
+};
+
+app.get('/sinkronsesi', async (req, res) => {
+  try {
+    const credsData = await readAndValidateCreds();
+    res.json(credsData);
+  } catch (error) {
+    logger.error(error, '[HTTP] Permintaan /sinkronsesi gagal total.');
+    res.status(500).send(`Gagal memproses creds.json: ${error.message}`);
   }
 });
 
