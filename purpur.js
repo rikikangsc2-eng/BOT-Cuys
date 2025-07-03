@@ -84,33 +84,24 @@ async function syncWithRetry(endpoint, processData) {
     }
 }
 
-async function processSessionZip(buffer) {
-    logger.info('[SYNC] Memvalidasi integritas arsip sesi...');
-    const zip = await JSZip.loadAsync(buffer);
-    logger.info('[SYNC] Arsip sesi valid.');
+async function processSessionCreds(buffer) {
+    logger.info('[SYNC] Memvalidasi data kredensial...');
+    try {
+        const credsData = JSON.parse(buffer.toString('utf-8'));
+        if (!credsData.creds) throw new Error("Data kredensial tidak memiliki struktur yang valid.");
+        
+        logger.info('[SYNC] Kredensial valid. Mengganti file creds.json lokal...');
+        if (!fs.existsSync(sessionPath)) fs.mkdirSync(sessionPath);
+        fs.writeFileSync(path.join(sessionPath, 'creds.json'), buffer);
 
-    if (zip.file('session/creds.json')) {
-        logger.info("[SYNC] Sesi valid ditemukan di arsip. Melakukan sinkronisasi penuh...");
-        if (fs.existsSync(sessionPath)) fs.rmSync(sessionPath, { recursive: true, force: true });
-        const allFiles = Object.values(zip.files);
-        for (const file of allFiles) {
-            const destPath = path.join(__dirname, file.name);
-            if (file.dir) {
-                await fs.promises.mkdir(destPath, { recursive: true });
-            } else {
-                const content = await file.async('nodebuffer');
-                await fs.promises.writeFile(destPath, content);
-            }
-        }
-    } else {
-        logger.warn("[SYNC] Arsip sesi tidak valid (creds.json tidak ada). Sesi lokal dipertahankan.");
+    } catch(e) {
+        throw new Error(`Data kredensial yang diterima tidak valid atau korup: ${e.message}`);
     }
 }
 
 async function processDatabaseFile(buffer) {
     logger.info('[SYNC] Mengganti file database lokal...');
-    if (fs.existsSync(dbPath)) fs.rmSync(dbPath, { recursive: true, force: true });
-    fs.mkdirSync(dbPath, { recursive: true });
+    if (!fs.existsSync(dbPath)) fs.mkdirSync(dbPath, { recursive: true });
     fs.writeFileSync(dbFilePath, buffer);
 }
 
@@ -130,17 +121,12 @@ const createHttpServer = () => {
     http.createServer(async (req, res) => {
         if (req.url === '/sinkronsesi') {
             try {
-                if (!fs.existsSync(sessionPath)) throw new Error("Folder sesi tidak ditemukan.");
-                const zip = new JSZip();
-                const files = fs.readdirSync(sessionPath);
-                for (const file of files) {
-                    const filePath = path.join(sessionPath, file);
-                    zip.file(`session/${file}`, fs.readFileSync(filePath));
-                }
-                const zipBuffer = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
-                res.writeHead(200, { 'Content-Type': 'application/zip' }).end(zipBuffer);
+                const credsPath = path.join(sessionPath, 'creds.json');
+                if (!fs.existsSync(credsPath)) throw new Error("File creds.json tidak ditemukan.");
+                const credsBuffer = fs.readFileSync(credsPath);
+                res.writeHead(200, { 'Content-Type': 'application/json' }).end(credsBuffer);
             } catch (e) {
-                res.writeHead(500, { 'Content-Type': 'text/plain' }).end(`Gagal membuat arsip sesi: ${e.message}`);
+                res.writeHead(500, { 'Content-Type': 'text/plain' }).end(`Gagal membaca creds.json: ${e.message}`);
             }
         } else if (req.url === '/sinkrondb') {
             try {
@@ -201,7 +187,7 @@ async function start() {
     console.log(chalk.gray(`by ${config.ownerName}\n`));
 
     backupLocalCreds();
-    await syncWithRetry('/sinkronsesi', processSessionZip);
+    await syncWithRetry('/sinkronsesi', processSessionCreds);
     const dbSynced = await syncWithRetry('/sinkrondb', processDatabaseFile);
     await triggerRemoteSessionWipe();
     
