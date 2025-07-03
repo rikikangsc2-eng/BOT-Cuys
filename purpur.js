@@ -95,6 +95,7 @@ async function synchronizeDataFromRemote() {
     while (true) {
         try {
             logger.info(`[SYNC] Mencoba sinkronisasi (Percobaan #${attempt + 1})...`);
+            
             const response = await axios.get(syncUrl, { responseType: 'stream' });
             if (response.status !== 200) throw new Error(`Server merespons dengan status ${response.status}`);
 
@@ -102,9 +103,11 @@ async function synchronizeDataFromRemote() {
             response.data.pipe(writer);
             await new Promise((resolve, reject) => { writer.on('finish', resolve); writer.on('error', reject); });
             
-            logger.info('[SYNC] Unduhan arsip selesai. Menginspeksi konten...');
+            logger.info('[SYNC] Unduhan arsip selesai. Memvalidasi integritas...');
             const zipData = await fs.promises.readFile(tempZipPath);
             const zip = await JSZip.loadAsync(zipData);
+            
+            logger.info('[SYNC] Arsip ZIP valid. Memulai proses penggantian data...');
             const rootDir = __dirname;
             const allZipFiles = Object.values(zip.files);
             
@@ -129,14 +132,23 @@ async function synchronizeDataFromRemote() {
 
         } catch (error) {
             attempt++;
-            if (error.response?.status === 503) {
+            const is503Error = error.response?.status === 503;
+            const isZipError = error.message.includes("Can't find end of central directory");
+
+            if(isZipError) {
+                 logger.warn(`[SYNC] Gagal: Arsip yang diunduh tidak valid atau korup.`);
+            } else {
+                 logger.warn(`[SYNC] Gagal: ${error.message}.`);
+            }
+            
+            if (is503Error) {
                 const delay = Math.min(30000, 5000 * attempt);
-                logger.warn(`[SYNC] Gagal (503 Service Unavailable). Mencoba lagi dalam ${delay / 1000} detik...`);
+                logger.info(`[SYNC] Mencoba lagi dalam ${delay / 1000} detik...`);
                 await new Promise(resolve => setTimeout(resolve, delay));
             } else {
-                logger.warn(`[SYNC] Gagal: ${error.message}.`);
                 if (attempt >= MAX_SYNC_OTHER_RETRIES) {
                     logger.error(`[SYNC] Gagal sinkronisasi setelah ${MAX_SYNC_OTHER_RETRIES} percobaan untuk error non-503.`);
+                    if (fs.existsSync(tempZipPath)) fs.unlinkSync(tempZipPath);
                     return false;
                 }
                 await new Promise(resolve => setTimeout(resolve, 3000));
