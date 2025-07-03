@@ -84,15 +84,23 @@ async function syncWithRetry(endpoint, processData, axiosOptions = {}) {
     }
 }
 
-async function processSessionCreds(credsData) {
+async function processSessionCreds(buffer) {
     logger.info('[SYNC] Memvalidasi data kredensial...');
-    if (!credsData || !credsData.creds) {
-        throw new Error("Data kredensial yang diterima tidak memiliki struktur yang valid.");
+    try {
+        const credsString = buffer.toString('utf-8');
+        const credsData = JSON.parse(credsString);
+        
+        if (!credsData || !credsData.creds) {
+            throw new Error("Data kredensial yang diterima tidak memiliki struktur yang valid.");
+        }
+        
+        logger.info('[SYNC] Kredensial valid. Mengganti file creds.json lokal...');
+        if (!fs.existsSync(sessionPath)) fs.mkdirSync(sessionPath);
+        fs.writeFileSync(path.join(sessionPath, 'creds.json'), credsString);
+
+    } catch(e) {
+        throw new Error(`Data kredensial yang diterima tidak valid atau korup: ${e.message}`);
     }
-    logger.info('[SYNC] Kredensial valid. Mengganti file creds.json lokal...');
-    if (!fs.existsSync(sessionPath)) fs.mkdirSync(sessionPath);
-    const credsString = JSON.stringify(credsData, null, 2);
-    fs.writeFileSync(path.join(sessionPath, 'creds.json'), credsString);
 }
 
 async function processDatabaseFile(buffer) {
@@ -125,39 +133,6 @@ async function triggerRemoteSessionWipe() {
         logger.warn(`[WIPE] Gagal menghubungi instance lama (mungkin sudah nonaktif, ini normal).`);
     }
 }
-
-const createHttpServer = () => {
-    const PORT = process.env.PORT || 3000;
-    http.createServer(async (req, res) => {
-        if (req.url === '/sinkronsesi') {
-            try {
-                const credsPath = path.resolve(__dirname, 'session', 'creds.json');
-                if (!fs.existsSync(credsPath)) throw new Error("File creds.json tidak ditemukan.");
-                const credsBuffer = fs.readFileSync(credsPath);
-                res.writeHead(200, { 'Content-Type': 'application/json' }).end(credsBuffer);
-            } catch (e) {
-                res.writeHead(500, { 'Content-Type': 'text/plain' }).end(`Gagal membaca creds.json: ${e.message}`);
-            }
-        } else if (req.url === '/sinkrondb') {
-            try {
-                if (!fs.existsSync(dbFilePath)) throw new Error("File database tidak ditemukan.");
-                const dbBuffer = fs.readFileSync(dbFilePath);
-                res.writeHead(200, { 'Content-Type': 'application/octet-stream' }).end(dbBuffer);
-            } catch (e) {
-                res.writeHead(500, { 'Content-Type': 'text/plain' }).end(`Gagal membaca database: ${e.message}`);
-            }
-        } else if (req.url === '/removesesi') {
-            try {
-                if (fs.existsSync(sessionPath)) fs.rmSync(sessionPath, { recursive: true, force: true });
-                res.writeHead(200, { 'Content-Type': 'text/plain' }).end('Sesi berhasil dihapus.');
-            } catch (e) {
-                res.writeHead(500, { 'Content-Type': 'text/plain' }).end(`Gagal menghapus sesi: ${e.message}`);
-            }
-        } else {
-            res.writeHead(302, { 'Location': 'https://nirkyy-dev.hf.space' }).end();
-        }
-    }).listen(PORT, () => logger.info(`Server status berjalan di port ${PORT}`));
-};
 
 const connectToWhatsApp = () => new Promise(async (resolve, reject) => {
     const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
@@ -197,7 +172,7 @@ async function start() {
     console.log(chalk.gray(`by ${config.ownerName}\n`));
 
     backupLocalCreds();
-    await syncWithRetry('/sinkronsesi', processSessionCreds, { responseType: 'json' });
+    await syncWithRetry('/sinkronsesi', processSessionCreds, { responseType: 'arraybuffer' });
     const dbSynced = await syncWithRetry('/sinkrondb', processDatabaseFile, { responseType: 'arraybuffer' });
     await triggerRemoteSessionWipe();
     

@@ -18,8 +18,8 @@ const readAndValidateCreds = async () => {
     try {
       if (!fs.existsSync(credsPath)) throw new Error("File creds.json tidak ada.");
       const fileContent = fs.readFileSync(credsPath, 'utf-8');
-      const jsonData = JSON.parse(fileContent);
-      return jsonData;
+      JSON.parse(fileContent);
+      return fileContent;
     } catch (error) {
       if (i === MAX_READ_ATTEMPTS - 1) {
         logger.error(`Gagal membaca/mem-parse creds.json setelah ${MAX_READ_ATTEMPTS} percobaan.`);
@@ -33,8 +33,9 @@ const readAndValidateCreds = async () => {
 
 app.get('/sinkronsesi', async (req, res) => {
   try {
-    const credsData = await readAndValidateCreds();
-    res.json(credsData);
+    const credsString = await readAndValidateCreds();
+    res.setHeader('Content-Type', 'application/json');
+    res.send(credsString);
   } catch (error) {
     logger.error(error, '[HTTP] Permintaan /sinkronsesi gagal total.');
     res.status(500).send(`Gagal memproses creds.json: ${error.message}`);
