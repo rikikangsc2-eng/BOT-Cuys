@@ -68,10 +68,11 @@ function generateSingleItemChartHtml(itemName, itemSymbol, historyData, colors) 
     return `
     <html>
     <head>
+        <meta name="viewport" content="width=700, initial-scale=1.0">
         <style>
-            body { font-family: "Lucida Console", Courier, monospace; background-color: #0d1117; color: #c9d1d9; margin: 0; width: ${chartWidth}px; height: ${chartHeight}px; }
+            body { font-family: sans-serif; background-color: #0d1117; color: #c9d1d9; margin: 0; }
             .chart-container { background-color: #161b22; border: 1px solid #30363d; border-radius: 10px; padding: 20px; box-sizing: border-box; }
-            .title-container { text-align: center; font-size: 20px; font-weight: 700; margin-bottom: 15px; }
+            .title-container { text-align: center; font-size: 20px; font-weight: bold; margin-bottom: 15px; }
             .axis-label { font-size: 12px; fill: #8b949e; }
             .grid-line { stroke: #21262d; stroke-width: 1; }
         </style>
@@ -79,7 +80,7 @@ function generateSingleItemChartHtml(itemName, itemSymbol, historyData, colors) 
     <body>
         <div class="chart-container">
             <div class="title-container">${itemSymbol} ${itemName} / IDR</div>
-            <svg width="100%" height="100%" viewBox="0 0 ${chartWidth} ${chartHeight}">
+            <svg width="${chartWidth}" height="${chartHeight}" viewBox="0 0 ${chartWidth} ${chartHeight}">
                 ${yAxisLabels}
                 ${xAxisLabels}
                 ${candlesticks}
@@ -126,7 +127,11 @@ module.exports = {
                     'x-rapidapi-host': 'html-to-image2.p.rapidapi.com',
                     'x-rapidapi-key': config.rapidApiKey
                 },
-                data: { html: htmlContent },
+                data: { 
+                    html: htmlContent,
+                    viewport_width: 700,
+                    viewport_height: 350
+                },
                 responseType: 'arraybuffer'
             });
 
