@@ -63,6 +63,7 @@ async function checkWinCondition(sock, game) {
     }
 
     if (winner) {
+        if (game.phaseTimeout) clearTimeout(game.phaseTimeout);
         let endMessage = `🎊 *PERMAINAN BERAKHIR* 🎊\n\nPemenangnya adalah *${winner}*!\n\n`;
         endMessage += '📜 *Daftar Peran Akhir:*\n';
         for (const jid in game.players) {
@@ -79,6 +80,7 @@ async function checkWinCondition(sock, game) {
 }
 
 async function advanceToDay(sock, game) {
+    if (game.phaseTimeout) clearTimeout(game.phaseTimeout);
     game.phase = 'day';
     game.dayVotes = {};
 
@@ -139,7 +141,7 @@ async function advanceToDay(sock, game) {
     
     await sock.sendMessage(game.groupId, { text: discussionMessage, mentions: playerMentions });
     
-    setTimeout(() => {
+    game.phaseTimeout = setTimeout(() => {
         const currentGame = activeWWGames.get(game.groupId);
         if (currentGame && currentGame.phase === 'day' && currentGame.day === game.day) {
             advanceToNight(sock, currentGame);
@@ -148,6 +150,7 @@ async function advanceToDay(sock, game) {
 }
 
 async function advanceToNight(sock, game) {
+    if (game.phaseTimeout) clearTimeout(game.phaseTimeout);
     game.phase = 'night';
     game.day++;
     
@@ -217,7 +220,7 @@ async function advanceToNight(sock, game) {
         }
     }
 
-    setTimeout(() => {
+    game.phaseTimeout = setTimeout(() => {
         const currentGame = activeWWGames.get(game.groupId);
         if (currentGame && currentGame.phase === 'night' && currentGame.day === game.day) {
             advanceToDay(sock, currentGame);
@@ -256,7 +259,7 @@ module.exports = {
                         game = {
                             groupId: message.from, host: senderJid, phase: 'joining', players: {}, day: 0,
                             werewolf: {}, seer: { canSee: true }, guardian: { canProtect: true, protected: null, lastProtected: null }, healer: { canHeal: true, healed: null },
-                            dayVotes: {}
+                            dayVotes: {}, phaseTimeout: null
                         };
                         activeWWGames.set(message.from, game);
                         await sock.sendMessage(message.from, { text: `Sebuah permainan Werewolf baru telah dibuat oleh @${senderJid.split('@')[0]}!\n\nKetik \`${config.prefix}ww join\` untuk bergabung.`, mentions: [senderJid] });
@@ -294,7 +297,7 @@ module.exports = {
 
                     game.phase = 'setup';
                     await message.reply('⚔️ Game telah dimulai! Peran rahasia dan nomor permanen telah dibagikan melalui PM. Bersiaplah, malam pertama akan segera tiba...');
-                    setTimeout(() => advanceToNight(sock, game), 5000);
+                    game.phaseTimeout = setTimeout(() => advanceToNight(sock, game), 5000);
                     break;
                 
                 case 'list':
@@ -306,6 +309,7 @@ module.exports = {
                 case 'stop':
                     if (!game) return message.reply('Tidak ada game yang sedang berjalan.');
                     if (game.host !== senderJid) return message.reply('Hanya host yang bisa menghentikan game.');
+                    if (game.phaseTimeout) clearTimeout(game.phaseTimeout);
                     activeWWGames.delete(gameId);
                     return message.reply('🛑 Game telah dihentikan paksa oleh host.');
                     

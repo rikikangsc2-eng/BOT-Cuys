@@ -1,13 +1,4 @@
 module.exports = {
-    marketSettings: {
-        update_interval_ms: 5 * 60 * 1000,
-        max_history: 24,
-        base_prices: { emas: 75000, iron: 25000, bara: 15000 },
-        min_prices: { emas: 10000, iron: 5000, bara: 2000 },
-        volatility: { emas: 0.05, iron: 0.08, bara: 0.12 },
-        trend_strength: 0.1,
-        volume_impact_factor: 0.0001
-    },
     cooldowns: {
         berburu: 5 * 60 * 1000,
         meracik: 2 * 60 * 1000,

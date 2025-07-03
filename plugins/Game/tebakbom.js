@@ -29,36 +29,36 @@ module.exports = {
         const senderJid = message.sender;
         const groupJid = message.from;
         const action = args[0]?.toLowerCase();
-
+        
         if (activeBombGames.has(groupJid)) {
             return message.reply('Sudah ada permainan yang sedang berlangsung di grup ini.');
         }
-
+        
         if (['terima', 'tolak'].includes(action)) {
             const challengeKey = `${groupJid}:${senderJid}`;
             const challenge = pendingBombGames.get(challengeKey);
-
+            
             if (!challenge) {
                 return message.reply('Tidak ada tantangan tebak bom untukmu saat ini.');
             }
-
+            
             clearTimeout(challenge.timeout);
             pendingBombGames.delete(challengeKey);
             const { challengerJid, amount } = challenge;
-
+            
             if (action === 'tolak') {
                 return sock.sendMessage(groupJid, { text: `@${senderJid.split('@')[0]} telah menolak tantangan tebak bom dari @${challengerJid.split('@')[0]}.`, mentions: [senderJid, challengerJid] });
             }
-
+            
             if (action === 'terima') {
                 let usersDb = db.get('users');
                 const challengerBalance = usersDb[challengerJid]?.balance || 0;
                 const targetBalance = usersDb[senderJid]?.balance || 0;
-
+                
                 if (challengerBalance < amount || targetBalance < amount) {
                     return message.reply('Salah satu pemain tidak memiliki cukup uang untuk taruhan. Permainan dibatalkan.');
                 }
-
+                
                 const firstTurnJid = Math.random() < 0.5 ? challengerJid : senderJid;
                 const boxes = Array.from({ length: 9 }, (_, i) => numberToEmoji(i));
                 
@@ -69,36 +69,35 @@ module.exports = {
                         bombIndexes.push(bomb);
                     }
                 }
-
+                
                 const initialText = `*TEBAK BOM DIMULAI* 💣\n` +
                     `Taruhan: *Rp ${amount.toLocaleString()}*\n\n` +
                     generateBoard(boxes) +
                     `\nGiliran pertama adalah @${firstTurnJid.split('@')[0]}.\n\n` +
                     `_Balas pesan ini dengan nomor kotak (Waktu 30 detik)._`;
-
-                const initialMsg = await sock.sendMessage(groupJid, { text: initialText, mentions: [firstTurnJid] });
-
+                
+                await sock.sendMessage(groupJid, { text: initialText, mentions: [firstTurnJid] });
+                
                 const timeout = setTimeout(() => {
                     const game = activeBombGames.get(groupJid);
-                    if (game && game.messageID === initialMsg.key.id) {
-                        const winnerJid = (firstTurnJid === challengerJid) ? senderJid : challengerJid;
-                        const loserJid = firstTurnJid;
+                    if (game) {
+                        const winnerJid = (game.turn === challengerJid) ? senderJid : challengerJid;
+                        const loserJid = game.turn;
                         
                         let currentUsersDb = db.get('users');
                         currentUsersDb[winnerJid].balance += amount;
                         currentUsersDb[loserJid].balance -= amount;
                         db.save('users', currentUsersDb);
-
+                        
                         const endText = `*WAKTU HABIS!* ⏰\n\n` +
                             `@${loserJid.split('@')[0]} tidak menjawab dalam 30 detik.\n` +
-                            `Pemenangnya adalah @${winnerJid.split('@')[0]} dan mendapatkan *Rp ${amount.toLocaleString()}*!\n\n` +
-                            `*Papan Terakhir:*\n${generateBoard(game.boxes)}`;
+                            `Pemenangnya adalah @${winnerJid.split('@')[0]} dan mendapatkan *Rp ${amount.toLocaleString()}*!`;
                         
                         sock.sendMessage(groupJid, { text: endText, mentions: [winnerJid, loserJid] });
                         activeBombGames.delete(groupJid);
                     }
                 }, 30000);
-
+                
                 activeBombGames.set(groupJid, {
                     challengerJid,
                     targetJid: senderJid,
@@ -106,16 +105,15 @@ module.exports = {
                     turn: firstTurnJid,
                     bombIndexes,
                     boxes,
-                    messageID: initialMsg.key.id,
                     timeout
                 });
             }
             return;
         }
-
+        
         const targetJid = message.msg?.contextInfo?.mentionedJid?.[0];
         const amount = parseInt(args[1]);
-
+        
         if (!targetJid || isNaN(amount) || amount <= 0) {
             return message.reply('Gunakan format: *.tebakbom @user <jumlah_taruhan>*\nContoh: .tebakbom @user 1000');
         }
@@ -125,15 +123,15 @@ module.exports = {
         if (pendingBombGames.has(`${groupJid}:${targetJid}`) || activeBombGames.has(groupJid)) {
             return message.reply('Sudah ada tantangan atau permainan yang aktif di grup ini. Harap tunggu selesai.');
         }
-
+        
         let usersDb = db.get('users');
         const challengerBalance = usersDb[senderJid]?.balance || 0;
         const targetBalance = usersDb[targetJid]?.balance || 0;
-
+        
         if (challengerBalance < amount || targetBalance < amount) {
             return message.reply('Saldo Anda atau saldo target tidak cukup untuk taruhan ini.');
         }
-
+        
         const challengeKey = `${groupJid}:${targetJid}`;
         const timeout = setTimeout(() => {
             if (pendingBombGames.has(challengeKey)) {
@@ -141,7 +139,7 @@ module.exports = {
                 sock.sendMessage(groupJid, { text: `Tantangan tebak bom dari @${senderJid.split('@')[0]} untuk @${targetJid.split('@')[0]} telah kedaluwarsa.`, mentions: [senderJid, targetJid] });
             }
         }, 60 * 1000);
-
+        
         pendingBombGames.set(challengeKey, { challengerJid: senderJid, amount, timeout });
         await sock.sendMessage(groupJid, { text: `💣 *TANTANGAN TEBAK BOM* 💣\n\n@${senderJid.split('@')[0]} menantang @${targetJid.split('@')[0]} untuk bermain tebak bom dengan taruhan *Rp ${amount.toLocaleString()}*!\n\nKetik *.tebakbom terima* atau *.tebakbom tolak*. Waktu 60 detik.`, mentions: [senderJid, targetJid] });
     }

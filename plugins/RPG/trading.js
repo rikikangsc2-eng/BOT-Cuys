@@ -27,7 +27,6 @@ module.exports = {
         
         let usersDb = db.get('users');
         let market = db.get('market');
-        let market_volume = db.get('market_volume') || {};
         const user = usersDb[senderJid] || { balance: 0 };
         const taxRate = gameConfig.market.transaction_tax_rate;
         
@@ -56,12 +55,7 @@ module.exports = {
                 user.balance -= totalCost;
                 user[itemKey] = { amount: newTotalAmount, avgPrice: newAvgPrice };
                 usersDb[senderJid] = user;
-                
-                if (!market_volume[itemKey]) market_volume[itemKey] = { buy: 0, sell: 0 };
-                market_volume[itemKey].buy = (market_volume[itemKey].buy || 0) + amount;
-                
                 db.save('users', usersDb);
-                db.save('market_volume', market_volume);
                 
                 return message.reply(`✅ *Pembelian Berhasil*\n\n- *Aset:* ${itemMap[itemKey].name}\n- *Jumlah:* ${amount.toFixed(3)} gram\n- *Harga Beli:* Rp ${price.toLocaleString()}/gram\n- *Total Biaya:* Rp ${totalCost.toLocaleString()}\n- *Harga Rata-rata Baru:* Rp ${Math.round(newAvgPrice).toLocaleString()}/gram` + eventMessage);
             }
@@ -89,12 +83,7 @@ module.exports = {
                 }
                 
                 usersDb[senderJid] = user;
-                
-                if (!market_volume[itemKey]) market_volume[itemKey] = { buy: 0, sell: 0 };
-                market_volume[itemKey].sell = (market_volume[itemKey].sell || 0) + amount;
-                
                 db.save('users', usersDb);
-                db.save('market_volume', market_volume);
                 
                 return message.reply(`✅ *Penjualan Berhasil*\n\n- *Aset:* ${itemMap[itemKey].name}\n- *Jumlah:* ${amount.toFixed(3)} gram\n- *Harga Jual:* Rp ${price.toLocaleString()}/gram\n- *Pendapatan Kotor:* Rp ${grossIncome.toLocaleString()}\n- *Pajak (${(taxRate*100).toFixed(1)}%):* -Rp ${taxAmount.toLocaleString()}\n- *Pendapatan Bersih:* Rp ${netIncome.toLocaleString()}` + eventMessage);
             }
