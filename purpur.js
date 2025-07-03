@@ -100,9 +100,23 @@ async function processSessionCreds(buffer) {
 }
 
 async function processDatabaseFile(buffer) {
-    logger.info('[SYNC] Mengganti file database lokal...');
-    if (!fs.existsSync(dbPath)) fs.mkdirSync(dbPath, { recursive: true });
-    fs.writeFileSync(dbFilePath, buffer);
+    const tempDbPath = path.join(__dirname, 'storage.db.temp');
+    try {
+        fs.writeFileSync(tempDbPath, buffer);
+        logger.info('[SYNC] File database sementara telah ditulis. Melakukan uji integritas...');
+        
+        const tempDb = new (require('better-sqlite3'))(tempDbPath);
+        tempDb.pragma('integrity_check');
+        tempDb.close();
+        
+        logger.info('[SYNC] Uji integritas berhasil. Mengganti database utama...');
+        if (fs.existsSync(dbPath)) fs.rmSync(dbPath, { recursive: true, force: true });
+        fs.mkdirSync(dbPath, { recursive: true });
+        fs.renameSync(tempDbPath, dbFilePath);
+    } catch (e) {
+        if (fs.existsSync(tempDbPath)) fs.unlinkSync(tempDbPath);
+        throw new Error(`Uji integritas database gagal: ${e.message}`);
+    }
 }
 
 async function triggerRemoteSessionWipe() {
