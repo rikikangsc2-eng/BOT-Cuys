@@ -1,6 +1,6 @@
 const db = require('../../lib/database');
 const gameConfig = require('../../gameConfig');
-const axios = require('axios');
+const axios =require('axios');
 const config = require('../../config');
 
 function generateSingleItemChartHtml(itemName, itemSymbol, historyData, colors) {
@@ -66,8 +66,10 @@ function generateSingleItemChartHtml(itemName, itemSymbol, historyData, colors) 
     });
     
     return `
+    <!DOCTYPE html>
     <html>
     <head>
+        <meta charset="UTF-8">
         <style>
             body { font-family: sans-serif; background-color: #0d1117; color: #c9d1d9; margin: 0; }
             .chart-container { background-color: #161b22; border: 1px solid #30363d; border-radius: 10px; padding: 20px; box-sizing: border-box; }
@@ -94,9 +96,9 @@ module.exports = {
     description: 'Melihat grafik harga pasar. Gunakan: .harga <emas|iron|bara>',
     run: async (sock, message, args) => {
         const itemMap = { 
-            emas: { name: 'Emas', symbol: '🪙', colors: { bullish: '#26a69a', bearish: '#ef5350' } }, 
-            iron: { name: 'Iron', symbol: '🔩', colors: { bullish: '#26a69a', bearish: '#ef5350' } }, 
-            bara: { name: 'Bara', symbol: '🔥', colors: { bullish: '#26a69a', bearish: '#ef5350' } }
+            emas: { name: 'Emas', symbol: '滋', colors: { bullish: '#26a69a', bearish: '#ef5350' } }, 
+            iron: { name: 'Iron', symbol: '', colors: { bullish: '#26a69a', bearish: '#ef5350' } }, 
+            bara: { name: 'Bara', symbol: '', colors: { bullish: '#26a69a', bearish: '#ef5350' } }
         };
 
         const itemKey = args[0]?.toLowerCase() || 'emas';
