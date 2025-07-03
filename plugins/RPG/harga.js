@@ -69,8 +69,7 @@ function generateSingleItemChartHtml(itemName, itemSymbol, historyData, colors) 
     <html>
     <head>
         <style>
-            @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&display=swap');
-            body { font-family: 'Space Grotesk', sans-serif; background-color: #0d1117; color: #c9d1d9; margin: 0; width: ${chartWidth}px; height: ${chartHeight}px; }
+            body { font-family: "Lucida Console", Courier, monospace; background-color: #0d1117; color: #c9d1d9; margin: 0; width: ${chartWidth}px; height: ${chartHeight}px; }
             .chart-container { background-color: #161b22; border: 1px solid #30363d; border-radius: 10px; padding: 20px; box-sizing: border-box; }
             .title-container { text-align: center; font-size: 20px; font-weight: 700; margin-bottom: 15px; }
             .axis-label { font-size: 12px; fill: #8b949e; }
