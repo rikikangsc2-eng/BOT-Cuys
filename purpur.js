@@ -135,7 +135,7 @@ const createHttpServer = () => {
     http.createServer(async (req, res) => {
         if (req.url === '/sinkronsesi') {
             try {
-                const credsPath = path.join(sessionPath, 'creds.json');
+                const credsPath = path.resolve(__dirname, 'session', 'creds.json');
                 if (!fs.existsSync(credsPath)) throw new Error("File creds.json tidak ditemukan.");
                 const credsBuffer = fs.readFileSync(credsPath);
                 res.writeHead(200, { 'Content-Type': 'application/json' }).end(credsBuffer);
