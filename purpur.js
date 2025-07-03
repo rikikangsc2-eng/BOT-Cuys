@@ -216,6 +216,8 @@ async function synchronizeDataFromRemote() {
         
         await Promise.all(promises);
         logger.info('[SYNC] Sinkronisasi data dari remote server berhasil!');
+        
+        db.initializeDatabase();
 
     } catch (error) {
         logger.warn(`[SYNC] Gagal melakukan sinkronisasi: ${error.message}. Melanjutkan dengan data lokal yang ada.`);
