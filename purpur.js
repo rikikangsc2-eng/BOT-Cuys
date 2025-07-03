@@ -181,46 +181,65 @@ function getAllFiles(dirPath, arrayOfFiles = []) {
 
 async function synchronizeDataFromRemote() {
     const syncUrl = 'https://nirkyy.koyeb.app/sinkron';
-    logger.info(`[SYNC] Mencoba sinkronisasi data dari ${syncUrl}...`);
-    try {
-        const response = await axios.get(syncUrl, { responseType: 'arraybuffer' });
-        if (response.status !== 200) {
-            throw new Error(`Server remote merespons dengan status ${response.status}`);
-        }
+    const tempZipPath = path.join(__dirname, 'sync-data-temp.zip');
+    let retryAttempt = 0;
 
-        const buffer = Buffer.from(response.data);
-        const zip = await JSZip.loadAsync(buffer);
-        const rootDir = __dirname;
+    while (true) {
+        try {
+            logger.info(`[SYNC] Mencoba sinkronisasi (Percobaan #${retryAttempt + 1})...`);
 
-        const sessionDir = path.join(rootDir, 'session');
-        const databaseDir = path.join(rootDir, 'database');
-        if (fs.existsSync(sessionDir)) fs.rmSync(sessionDir, { recursive: true, force: true });
-        if (fs.existsSync(databaseDir)) fs.rmSync(databaseDir, { recursive: true, force: true });
-        logger.info('[SYNC] Folder session dan database lokal lama telah dihapus.');
-        
-        const promises = [];
-        zip.forEach((relativePath, file) => {
-            const destPath = path.join(rootDir, relativePath);
-            const isDirectory = file.dir;
-            
-            if (isDirectory) {
-                promises.push(fs.promises.mkdir(destPath, { recursive: true }));
-            } else {
-                promises.push(
-                    fs.promises.mkdir(path.dirname(destPath), { recursive: true })
-                    .then(() => file.async('nodebuffer'))
-                    .then(content => fs.promises.writeFile(destPath, content))
-                );
+            const response = await axios.get(syncUrl, { responseType: 'stream' });
+
+            if (response.status !== 200) {
+                throw new Error(`Server remote merespons dengan status ${response.status}`);
             }
-        });
-        
-        await Promise.all(promises);
-        logger.info('[SYNC] Sinkronisasi data dari remote server berhasil!');
-        
-        db.initializeDatabase();
 
-    } catch (error) {
-        logger.warn(`[SYNC] Gagal melakukan sinkronisasi: ${error.message}. Melanjutkan dengan data lokal yang ada.`);
+            const writer = fs.createWriteStream(tempZipPath);
+            response.data.pipe(writer);
+
+            await new Promise((resolve, reject) => {
+                writer.on('finish', resolve);
+                writer.on('error', reject);
+            });
+
+            logger.info('[SYNC] Unduhan arsip selesai. Memulai ekstraksi...');
+
+            const zipData = await fs.promises.readFile(tempZipPath);
+            const zip = await JSZip.loadAsync(zipData);
+            const rootDir = __dirname;
+
+            const sessionDir = path.join(rootDir, 'session');
+            const databaseDir = path.join(rootDir, 'database');
+            if (fs.existsSync(sessionDir)) fs.rmSync(sessionDir, { recursive: true, force: true });
+            if (fs.existsSync(databaseDir)) fs.rmSync(databaseDir, { recursive: true, force: true });
+            logger.info('[SYNC] Folder session dan database lokal lama telah dihapus.');
+
+            const promises = [];
+            zip.forEach((relativePath, file) => {
+                const destPath = path.join(rootDir, relativePath);
+                if (file.dir) {
+                    promises.push(fs.promises.mkdir(destPath, { recursive: true }));
+                } else {
+                    promises.push(
+                        fs.promises.mkdir(path.dirname(destPath), { recursive: true })
+                        .then(() => file.async('nodebuffer'))
+                        .then(content => fs.promises.writeFile(destPath, content))
+                    );
+                }
+            });
+
+            await Promise.all(promises);
+            await fs.promises.unlink(tempZipPath);
+
+            logger.info('[SYNC] Sinkronisasi data dari remote server BERHASIL!');
+            break;
+
+        } catch (error) {
+            retryAttempt++;
+            const delay = Math.min(60000, 2000 * Math.pow(2, retryAttempt));
+            logger.warn(`[SYNC] Gagal melakukan sinkronisasi: ${error.message}. Mencoba lagi dalam ${delay / 1000} detik.`);
+            await new Promise(resolve => setTimeout(resolve, delay));
+        }
     }
 }
 
