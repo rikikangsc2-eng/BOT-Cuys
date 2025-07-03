@@ -5,7 +5,9 @@ const config = require('../../config');
 
 function generateSingleItemChartHtml(itemName, itemSymbol, historyData, colors) {
     const numDataPoints = gameConfig.marketSettings.max_history;
-    const data = (historyData || []).slice(-numDataPoints);
+    const data = (historyData || [])
+        .filter(d => d && typeof d.open === 'number' && typeof d.high === 'number' && typeof d.low === 'number' && typeof d.close === 'number')
+        .slice(-numDataPoints);
 
     if (data.length < 2) {
         return `<html><body style="background-color: #0d1117; color: #c9d1d9; display:flex; align-items:center; justify-content:center; height:100%;"><h1>Data pasar tidak cukup untuk ${itemName}.</h1></body></html>`;
@@ -34,7 +36,7 @@ function generateSingleItemChartHtml(itemName, itemSymbol, historyData, colors) 
         const isBullish = d.close >= d.open;
         const color = isBullish ? colors.bullish : colors.bearish;
 
-        const x = padding.left + (i / (numDataPoints - 1)) * (chartWidth - padding.left - padding.right) - (candleWidth / 2);
+        const x = padding.left + (i / (data.length - 1)) * (chartWidth - padding.left - padding.right) - (candleWidth / 2);
         
         const wickY1 = padding.top + ((maxPrice - d.high) / priceRange) * (chartHeight - padding.top - padding.bottom);
         const wickY2 = padding.top + ((maxPrice - d.low) / priceRange) * (chartHeight - padding.top - padding.bottom);
@@ -57,8 +59,8 @@ function generateSingleItemChartHtml(itemName, itemSymbol, historyData, colors) 
 
     let xAxisLabels = '';
     timeLabels.forEach((label, i) => {
-        if (i > 0 && (i % 4 === 0 || i === numDataPoints - 1)) {
-            const x = padding.left + (i / (numDataPoints - 1)) * (chartWidth - padding.left - padding.right);
+        if (data.length > 1 && (i > 0 && (i % 4 === 0 || i === data.length - 1))) {
+            const x = padding.left + (i / (data.length - 1)) * (chartWidth - padding.left - padding.right);
             xAxisLabels += `<text x="${x}" y="${chartHeight - padding.bottom + 20}" text-anchor="middle" class="axis-label">${label}</text>`;
         }
     });
