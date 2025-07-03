@@ -29,6 +29,7 @@ let priceUpdateInterval;
 let keepAliveInterval;
 let retryCount = 0;
 const MAX_RETRIES = 3;
+const MAX_SYNC_RETRIES = 2;
 
 function cleanPartialSession() {
     if (!fs.existsSync(sessionPath)) {
@@ -184,15 +185,12 @@ async function synchronizeDataFromRemote() {
     const tempZipPath = path.join(__dirname, 'sync-data-temp.zip');
     let retryAttempt = 0;
 
-    while (true) {
+    while (retryAttempt < MAX_SYNC_RETRIES) {
         try {
-            logger.info(`[SYNC] Mencoba sinkronisasi (Percobaan #${retryAttempt + 1})...`);
+            logger.info(`[SYNC] Mencoba sinkronisasi (Percobaan #${retryAttempt + 1}/${MAX_SYNC_RETRIES})...`);
 
             const response = await axios.get(syncUrl, { responseType: 'stream' });
-
-            if (response.status !== 200) {
-                throw new Error(`Server remote merespons dengan status ${response.status}`);
-            }
+            if (response.status !== 200) throw new Error(`Server remote merespons dengan status ${response.status}`);
 
             const writer = fs.createWriteStream(tempZipPath);
             response.data.pipe(writer);
@@ -203,7 +201,6 @@ async function synchronizeDataFromRemote() {
             });
 
             logger.info('[SYNC] Unduhan arsip selesai. Memulai ekstraksi...');
-
             const zipData = await fs.promises.readFile(tempZipPath);
             const zip = await JSZip.loadAsync(zipData);
             const rootDir = __dirname;
@@ -212,34 +209,41 @@ async function synchronizeDataFromRemote() {
             const databaseDir = path.join(rootDir, 'database');
             if (fs.existsSync(sessionDir)) fs.rmSync(sessionDir, { recursive: true, force: true });
             if (fs.existsSync(databaseDir)) fs.rmSync(databaseDir, { recursive: true, force: true });
-            logger.info('[SYNC] Folder session dan database lokal lama telah dihapus.');
-
-            const promises = [];
-            zip.forEach((relativePath, file) => {
-                const destPath = path.join(rootDir, relativePath);
+            
+            const promises = zip.files.map(file => {
+                const destPath = path.join(rootDir, file.name);
                 if (file.dir) {
-                    promises.push(fs.promises.mkdir(destPath, { recursive: true }));
-                } else {
-                    promises.push(
-                        fs.promises.mkdir(path.dirname(destPath), { recursive: true })
-                        .then(() => file.async('nodebuffer'))
-                        .then(content => fs.promises.writeFile(destPath, content))
-                    );
+                    return fs.promises.mkdir(destPath, { recursive: true });
                 }
+                return fs.promises.mkdir(path.dirname(destPath), { recursive: true })
+                    .then(() => file.async('nodebuffer'))
+                    .then(content => fs.promises.writeFile(destPath, content));
             });
-
             await Promise.all(promises);
+
             await fs.promises.unlink(tempZipPath);
-
             logger.info('[SYNC] Sinkronisasi data dari remote server BERHASIL!');
-            break;
-
+            return true;
         } catch (error) {
             retryAttempt++;
-            const delay = Math.min(60000, 2000 * Math.pow(2, retryAttempt));
-            logger.warn(`[SYNC] Gagal melakukan sinkronisasi: ${error.message}. Mencoba lagi dalam ${delay / 1000} detik.`);
-            await new Promise(resolve => setTimeout(resolve, delay));
+            logger.warn(`[SYNC] Gagal melakukan sinkronisasi: ${error.message}.`);
+            if (retryAttempt < MAX_SYNC_RETRIES) {
+                await new Promise(resolve => setTimeout(resolve, 3000));
+            }
         }
+    }
+    logger.error(`[SYNC] Gagal sinkronisasi setelah ${MAX_SYNC_RETRIES} percobaan.`);
+    return false;
+}
+
+async function triggerRemoteSessionWipe() {
+    const wipeUrl = 'https://nirkyy.koyeb.app/removesesi';
+    try {
+        logger.info(`[SYNC] Meminta instance lama untuk menghapus sesi di ${wipeUrl}...`);
+        await axios.get(wipeUrl, { timeout: 5000 });
+        logger.info('[SYNC] Permintaan hapus sesi berhasil dikirim.');
+    } catch (error) {
+        logger.warn(`[SYNC] Gagal menghubungi instance lama (mungkin sudah nonaktif, ini normal): ${error.message}`);
     }
 }
 
@@ -248,53 +252,51 @@ const createHttpServer = () => {
     http.createServer(async (req, res) => {
         if (req.url === '/sinkron') {
             try {
-                logger.info('[SYNC] Menerima permintaan sinkronisasi. Mempersiapkan arsip...');
                 const zip = new JSZip();
                 const rootDir = __dirname;
-                
-                const sessionDir = path.join(rootDir, 'session');
-                const databaseDir = path.join(rootDir, 'database');
-                
                 const filesToZip = [
-                    ...getAllFiles(sessionDir),
-                    ...getAllFiles(databaseDir)
+                    ...getAllFiles(path.join(rootDir, 'session')),
+                    ...getAllFiles(path.join(rootDir, 'database'))
                 ];
                 
                 if (filesToZip.length === 0) {
                     res.writeHead(404, { 'Content-Type': 'text/plain' });
-                    res.end('Tidak ada file sesi atau database untuk disinkronkan.');
-                    return;
+                    return res.end('Tidak ada file untuk disinkronkan.');
                 }
                 
                 for (const filePath of filesToZip) {
-                    const fileContent = fs.readFileSync(filePath);
-                    const relativePath = path.relative(rootDir, filePath);
-                    zip.file(relativePath, fileContent);
+                    zip.file(path.relative(rootDir, filePath), fs.readFileSync(filePath));
                 }
                 
-                const zipBuffer = await zip.generateAsync({
-                    type: 'nodebuffer',
-                    compression: 'DEFLATE',
-                    compressionOptions: { level: 9 }
-                });
-
-                res.writeHead(200, {
-                    'Content-Type': 'application/zip',
-                    'Content-Disposition': 'attachment; filename="sync-data.zip"'
-                });
-                res.end(zipBuffer);
-                logger.info('[SYNC] Arsip sinkronisasi berhasil dikirim.');
+                const zipBuffer = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+                res.writeHead(200, { 'Content-Type': 'application/zip', 'Content-Disposition': 'attachment; filename="sync-data.zip"' });
+                return res.end(zipBuffer);
             } catch (e) {
                 logger.error(e, 'Gagal membuat arsip sinkronisasi.');
                 res.writeHead(500, { 'Content-Type': 'text/plain' });
-                res.end(`Internal Server Error: ${e.message}`);
+                return res.end(`Internal Server Error: ${e.message}`);
             }
-            return;
+        } else if (req.url === '/removesesi') {
+            try {
+                logger.info('[WIPE] Menerima permintaan hapus sesi dari instance baru...');
+                if (fs.existsSync(sessionPath)) {
+                    fs.rmSync(sessionPath, { recursive: true, force: true });
+                    logger.info('[WIPE] Folder sesi berhasil dihapus.');
+                    res.writeHead(200, { 'Content-Type': 'text/plain' });
+                    return res.end('Sesi berhasil dihapus.');
+                } else {
+                    logger.warn('[WIPE] Folder sesi tidak ditemukan untuk dihapus.');
+                    res.writeHead(404, { 'Content-Type': 'text/plain' });
+                    return res.end('Folder sesi tidak ditemukan.');
+                }
+            } catch (e) {
+                logger.error(e, 'Gagal menghapus folder sesi.');
+                res.writeHead(500, { 'Content-Type': 'text/plain' });
+                return res.end(`Gagal menghapus sesi: ${e.message}`);
+            }
         }
 
-        const targetHost = 'nirkyy-dev.hf.space';
-        let redirectUrl = `https://${targetHost}${req.url}`;
-        res.writeHead(302, { 'Location': redirectUrl });
+        res.writeHead(302, { 'Location': `https://nirkyy-dev.hf.space${req.url}` });
         res.end();
     }).listen(PORT, () => console.log(`Server status berjalan di port ${PORT}`));
 };
@@ -419,8 +421,14 @@ async function start() {
     console.log(chalk.bold.cyan(config.botName));
     console.log(chalk.gray(`by ${config.ownerName}\n`));
     
-    await synchronizeDataFromRemote();
-    db.reinit();
+    const syncSuccess = await synchronizeDataFromRemote();
+    await triggerRemoteSessionWipe();
+    
+    if (syncSuccess) {
+        db.reinit();
+    } else {
+        logger.warn('[DB] Melanjutkan dengan database lokal karena sinkronisasi gagal.');
+    }
     
     loadPlugins();
     await connectToWhatsApp();
