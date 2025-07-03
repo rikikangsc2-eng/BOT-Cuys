@@ -1,78 +1,182 @@
-const express = require('express');
+const {
+    default: makeWASocket,
+    useMultiFileAuthState,
+    DisconnectReason,
+    Browsers,
+    fetchLatestBaileysVersion
+} = require('@whiskeysockets/baileys');
+const pino = require('pino');
+const { Boom } = require('@hapi/boom');
 const path = require('path');
+const http = require('http');
+const chalk = require('chalk');
 const fs = require('fs');
+const qrcode = require('qrcode-terminal');
+const axios = require('axios');
+const JSZip = require('jszip');
+
+const handler = require('./handler');
+const config = require('./config');
+const db = require('./lib/database');
 const logger = require('./lib/logger');
+const { getBuffer } = require('./lib/functions');
+const { loadPlugins } = require('./lib/pluginManager');
+const { setConnectionStatus, processQueue, setSocket } = require('./lib/connectionManager');
 
-const app = express();
-const PORT = process.env.PORT || 3000;
+const sessionPath = path.join(__dirname, 'session');
+const dbPath = path.join(__dirname, 'database');
+const dbFilePath = path.join(dbPath, 'storage.db');
+const backupCredsPath = path.join(__dirname, 'creds.backup.json');
+let sock;
+let priceUpdateInterval;
+let keepAliveInterval;
+let connectRetryCount = 0;
+const MAX_CONNECT_RETRIES = 3;
+const MAX_SYNC_OTHER_RETRIES = 2;
 
-const sessionPath = path.resolve(__dirname, 'session');
-const dbFilePath = path.resolve(__dirname, 'database', 'storage.db');
-const credsPath = path.resolve(sessionPath, 'creds.json');
+function backupLocalCreds() {
+    const credsPath = path.join(sessionPath, 'creds.json');
+    if (fs.existsSync(credsPath)) {
+        fs.copyFileSync(credsPath, backupCredsPath);
+        logger.info('[BACKUP] Kredensial lokal berhasil dicadangkan.');
+    }
+}
 
-const readAndValidateCreds = async () => {
-  const MAX_READ_ATTEMPTS = 3;
-  const RETRY_DELAY_MS = 200;
-  
-  for (let i = 0; i < MAX_READ_ATTEMPTS; i++) {
+function restoreLocalCreds() {
+    if (fs.existsSync(backupCredsPath)) {
+        if (!fs.existsSync(sessionPath)) fs.mkdirSync(sessionPath);
+        fs.copyFileSync(backupCredsPath, path.join(sessionPath, 'creds.json'));
+        logger.info('[RESTORE] Kredensial cadangan berhasil dipulihkan.');
+        return true;
+    }
+    logger.warn('[RESTORE] Tidak ada kredensial cadangan untuk dipulihkan.');
+    return false;
+}
+
+async function syncWithRetry(endpoint, processData) {
+    const syncUrl = `https://nirkyy.koyeb.app${endpoint}`;
+    let attempt = 0;
+    while (true) {
+        try {
+            logger.info(`[SYNC] Mencoba sinkronisasi dari ${endpoint} (Percobaan #${attempt + 1})...`);
+            const response = await axios.get(syncUrl, { responseType: 'arraybuffer' });
+            if (response.status !== 200) throw new Error(`Server merespons dengan status ${response.status}`);
+            await processData(response.data);
+            logger.info(`[SYNC] Sinkronisasi dari ${endpoint} BERHASIL!`);
+            return true;
+        } catch (error) {
+            attempt++;
+            const is503Error = error.response?.status === 503;
+            logger.warn(`[SYNC] Gagal sinkronisasi ${endpoint}: ${error.message}.`);
+
+            if (is503Error) {
+                const delay = Math.min(30000, 5000 * attempt);
+                logger.info(`[SYNC] Error 503, mencoba lagi dalam ${delay / 1000} detik...`);
+                await new Promise(resolve => setTimeout(resolve, delay));
+            } else {
+                if (attempt >= MAX_SYNC_OTHER_RETRIES) {
+                    logger.error(`[SYNC] Gagal sinkronisasi ${endpoint} setelah ${MAX_SYNC_OTHER_RETRIES} percobaan.`);
+                    return false;
+                }
+                await new Promise(resolve => setTimeout(resolve, 3000));
+            }
+        }
+    }
+}
+
+async function processSessionCreds(buffer) {
+    logger.info('[SYNC] Menerima data kredensial. Menulis ke file...');
+    if (!fs.existsSync(sessionPath)) fs.mkdirSync(sessionPath);
+    fs.writeFileSync(path.join(sessionPath, 'creds.json'), buffer);
+}
+
+async function processDatabaseFile(buffer) {
+    logger.info('[SYNC] Menerima data database. Menulis ke file...');
+    if (!fs.existsSync(dbPath)) fs.mkdirSync(dbPath, { recursive: true });
+    fs.writeFileSync(dbFilePath, buffer);
+}
+
+async function triggerRemoteSessionWipe() {
+    const wipeUrl = 'https://nirkyy.koyeb.app/removesesi';
     try {
-      if (!fs.existsSync(credsPath)) throw new Error("File creds.json tidak ada.");
-      const fileContent = fs.readFileSync(credsPath, 'utf-8');
-      JSON.parse(fileContent);
-      return fileContent;
+        logger.info(`[WIPE] Meminta instance lama untuk menghapus sesi di ${wipeUrl}...`);
+        await axios.get(wipeUrl, { timeout: 5000 });
+        logger.info('[WIPE] Permintaan hapus sesi berhasil dikirim.');
     } catch (error) {
-      if (i === MAX_READ_ATTEMPTS - 1) {
-        logger.error(`Gagal membaca/mem-parse creds.json setelah ${MAX_READ_ATTEMPTS} percobaan.`);
-        throw error;
-      }
-      logger.warn(`Gagal membaca creds.json (percobaan ${i + 1}), mungkin sedang ditulis. Mencoba lagi...`);
-      await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS));
+        logger.warn(`[WIPE] Gagal menghubungi instance lama (mungkin sudah nonaktif, ini normal).`);
     }
-  }
-};
+}
 
-app.get('/sinkronsesi', async (req, res) => {
-  try {
-    const credsString = await readAndValidateCreds();
-    res.setHeader('Content-Type', 'application/json');
-    res.send(credsString);
-  } catch (error) {
-    logger.error(error, '[HTTP] Permintaan /sinkronsesi gagal total.');
-    res.status(500).send(`Gagal memproses creds.json: ${error.message}`);
-  }
+const connectToWhatsApp = () => new Promise(async (resolve, reject) => {
+    const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
+    const { version } = await fetchLatestBaileysVersion();
+    
+    sock = makeWASocket({ version, auth: state, browser: Browsers.windows('Chrome'), logger: pino({ level: 'silent' }), getMessage: async () => undefined });
+    setSocket(sock);
+    sock.ev.on('creds.update', saveCreds);
+
+    sock.ev.on('connection.update', (update) => {
+        const { connection, lastDisconnect } = update;
+        if (connection === 'open') {
+            connectRetryCount = 0; setConnectionStatus(true);
+            logger.info(`Terhubung sebagai ${sock.user.name || config.botName}`); resolve(sock);
+        } else if (connection === 'close') {
+            setConnectionStatus(false);
+            const error = new Boom(lastDisconnect?.error);
+            const statusCode = error.output?.statusCode;
+            if (statusCode === DisconnectReason.loggedOut) {
+                logger.error('[FATAL] Kredensial tidak valid (Logged Out).'); return reject(error);
+            }
+            connectRetryCount++;
+            if (connectRetryCount <= MAX_CONNECT_RETRIES) {
+                logger.warn(`Koneksi terputus (Kode: ${statusCode}), mencoba lagi... (${connectRetryCount}/${MAX_CONNECT_RETRIES})`);
+                setTimeout(() => connectToWhatsApp().then(resolve).catch(reject), 5000 * connectRetryCount);
+            } else {
+                logger.error(`[FATAL] Gagal terhubung setelah ${MAX_CONNECT_RETRIES} percobaan.`); process.exit(1);
+            }
+        }
+    });
+    sock.ev.on('messages.upsert', (m) => { if (m.type === 'notify') m.messages.forEach(msg => handler(sock, msg)); });
 });
 
-app.get('/sinkrondb', (req, res) => {
-  if (fs.existsSync(dbFilePath)) {
-    res.setHeader('Content-Type', 'application/octet-stream');
-    res.sendFile(dbFilePath);
-  } else {
-    logger.error('[HTTP] Permintaan /sinkrondb gagal: storage.db tidak ditemukan.');
-    res.status(404).send('File storage.db tidak ditemukan.');
-  }
-});
+async function start() {
+    console.clear();
+    console.log(chalk.bold.cyan(config.botName));
+    console.log(chalk.gray(`by ${config.ownerName}\n`));
 
-app.get('/removesesi', (req, res) => {
-  try {
-    logger.info('[HTTP] Menerima permintaan /removesesi...');
-    if (fs.existsSync(sessionPath)) {
-      fs.rmSync(sessionPath, { recursive: true, force: true });
-      logger.info('[HTTP] Folder sesi berhasil dihapus via endpoint.');
-      res.status(200).send('Sesi berhasil dihapus.');
-    } else {
-      logger.warn('[HTTP] Folder sesi tidak ditemukan untuk dihapus via endpoint.');
-      res.status(404).send('Folder sesi tidak ditemukan.');
+    backupLocalCreds();
+    await syncWithRetry('/sinkronsesi', processSessionCreds);
+    const dbSynced = await syncWithRetry('/sinkrondb', processDatabaseFile);
+    await triggerRemoteSessionWipe();
+    
+    if (dbSynced) db.reinit();
+    else logger.warn('[DB] Melanjutkan dengan database lokal karena sinkronisasi gagal.');
+    
+    loadPlugins();
+    
+    logger.info('Memberi jeda 2 detik untuk stabilisasi sistem file...');
+    await new Promise(res => setTimeout(res, 2000));
+
+    try {
+        logger.info('[CONNECT] Mencoba terhubung dengan sesi saat ini...');
+        await connectToWhatsApp();
+    } catch (e) {
+        if (e.output?.statusCode === DisconnectReason.loggedOut) {
+            logger.error('[FAILSAFE] Sesi saat ini tidak valid. Mencoba memulihkan dari cadangan...');
+            if (restoreLocalCreds()) {
+                try {
+                    logger.info('[CONNECT] Mencoba terhubung kembali dengan sesi cadangan...');
+                    await connectToWhatsApp();
+                } catch (finalError) {
+                    logger.fatal('[FATAL] Sesi cadangan juga gagal.', finalError); process.exit(1);
+                }
+            } else {
+                logger.fatal('[FATAL] Tidak ada sesi cadangan untuk dipulihkan.'); process.exit(1);
+            }
+        } else {
+            logger.fatal('[FATAL] Terjadi error tak terduga saat koneksi awal.', e); process.exit(1);
+        }
     }
-  } catch (e) {
-    logger.error(e, '[HTTP] Gagal menghapus folder sesi via endpoint.');
-    res.status(500).send(`Gagal menghapus sesi: ${e.message}`);
-  }
-});
+}
 
-app.use((req, res) => {
-  res.redirect('https://nirkyy-dev.hf.space');
-});
-
-app.listen(PORT, () => {
-  logger.info(`Server HTTP untuk sinkronisasi berjalan di port ${PORT}`);
-});
+start();
