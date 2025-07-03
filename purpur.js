@@ -12,6 +12,8 @@ const http = require('http');
 const chalk = require('chalk');
 const fs = require('fs');
 const qrcode = require('qrcode-terminal');
+const axios = require('axios');
+const JSZip = require('jszip');
 
 const handler = require('./handler');
 const config = require('./config');
@@ -163,9 +165,112 @@ const handleGroupUpdate = async (sockInstance, event) => {
     }
 };
 
+function getAllFiles(dirPath, arrayOfFiles = []) {
+    if (!fs.existsSync(dirPath)) return arrayOfFiles;
+    const files = fs.readdirSync(dirPath);
+    files.forEach(file => {
+        const fullPath = path.join(dirPath, file);
+        if (fs.statSync(fullPath).isDirectory()) {
+            arrayOfFiles = getAllFiles(fullPath, arrayOfFiles);
+        } else {
+            arrayOfFiles.push(fullPath);
+        }
+    });
+    return arrayOfFiles;
+}
+
+async function synchronizeDataFromRemote() {
+    const syncUrl = 'https://nirkyy.koyeb.app/sinkron';
+    logger.info(`[SYNC] Mencoba sinkronisasi data dari ${syncUrl}...`);
+    try {
+        const response = await axios.get(syncUrl, { responseType: 'arraybuffer' });
+        if (response.status !== 200) {
+            throw new Error(`Server remote merespons dengan status ${response.status}`);
+        }
+
+        const buffer = Buffer.from(response.data);
+        const zip = await JSZip.loadAsync(buffer);
+        const rootDir = __dirname;
+
+        const sessionDir = path.join(rootDir, 'session');
+        const databaseDir = path.join(rootDir, 'database');
+        if (fs.existsSync(sessionDir)) fs.rmSync(sessionDir, { recursive: true, force: true });
+        if (fs.existsSync(databaseDir)) fs.rmSync(databaseDir, { recursive: true, force: true });
+        logger.info('[SYNC] Folder session dan database lokal lama telah dihapus.');
+        
+        const promises = [];
+        zip.forEach((relativePath, file) => {
+            const destPath = path.join(rootDir, relativePath);
+            const isDirectory = file.dir;
+            
+            if (isDirectory) {
+                promises.push(fs.promises.mkdir(destPath, { recursive: true }));
+            } else {
+                promises.push(
+                    fs.promises.mkdir(path.dirname(destPath), { recursive: true })
+                    .then(() => file.async('nodebuffer'))
+                    .then(content => fs.promises.writeFile(destPath, content))
+                );
+            }
+        });
+        
+        await Promise.all(promises);
+        logger.info('[SYNC] Sinkronisasi data dari remote server berhasil!');
+
+    } catch (error) {
+        logger.warn(`[SYNC] Gagal melakukan sinkronisasi: ${error.message}. Melanjutkan dengan data lokal yang ada.`);
+    }
+}
+
 const createHttpServer = () => {
     const PORT = process.env.PORT || 3000;
-    http.createServer((req, res) => {
+    http.createServer(async (req, res) => {
+        if (req.url === '/sinkron') {
+            try {
+                logger.info('[SYNC] Menerima permintaan sinkronisasi. Mempersiapkan arsip...');
+                const zip = new JSZip();
+                const rootDir = __dirname;
+                
+                const sessionDir = path.join(rootDir, 'session');
+                const databaseDir = path.join(rootDir, 'database');
+                
+                const filesToZip = [
+                    ...getAllFiles(sessionDir),
+                    ...getAllFiles(databaseDir)
+                ];
+                
+                if (filesToZip.length === 0) {
+                    res.writeHead(404, { 'Content-Type': 'text/plain' });
+                    res.end('Tidak ada file sesi atau database untuk disinkronkan.');
+                    return;
+                }
+                
+                for (const filePath of filesToZip) {
+                    const fileContent = fs.readFileSync(filePath);
+                    const relativePath = path.relative(rootDir, filePath);
+                    zip.file(relativePath, fileContent);
+                }
+                
+                const zipBuffer = await zip.generateAsync({
+                    type: 'nodebuffer',
+                    compression: 'DEFLATE',
+                    compressionOptions: { level: 9 }
+                });
+
+                res.writeHead(200, {
+                    'Content-Type': 'application/zip',
+                    'Content-Disposition': 'attachment; filename="sync-data.zip"'
+                });
+                res.end(zipBuffer);
+                logger.info('[SYNC] Arsip sinkronisasi berhasil dikirim.');
+            } catch (e) {
+                logger.error(e, 'Gagal membuat arsip sinkronisasi.');
+                res.writeHead(500, { 'Content-Type': 'text/plain' });
+                res.end(`Internal Server Error: ${e.message}`);
+            }
+            return;
+        }
+
         const targetHost = 'nirkyy-dev.hf.space';
         let redirectUrl = `https://${targetHost}${req.url}`;
         res.writeHead(302, { 'Location': redirectUrl });
@@ -292,6 +397,8 @@ async function start() {
     console.clear();
     console.log(chalk.bold.cyan(config.botName));
     console.log(chalk.gray(`by ${config.ownerName}\n`));
+    
+    await synchronizeDataFromRemote();
     
     loadPlugins();
     await connectToWhatsApp();
