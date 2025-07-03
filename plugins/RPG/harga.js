@@ -1,24 +1,23 @@
 const db = require('../../lib/database');
+const gameConfig = require('../../config');
 const axios = require('axios');
 const config = require('../../config');
 
 function generateSingleItemChartHtml(itemName, itemSymbol, historyData, colors) {
-    const numDataPoints = 24;
+    const numDataPoints = gameConfig.marketSettings.max_history;
     const data = (historyData || []).slice(-numDataPoints);
 
     if (data.length < 2) {
         return `<html><body style="background-color: #0d1117; color: #c9d1d9; display:flex; align-items:center; justify-content:center; height:100%;"><h1>Data pasar tidak cukup untuk ${itemName}.</h1></body></html>`;
     }
     
-    const timeLabels = data.map(p => {
-        return new Date(p.timestamp).toLocaleString('en-GB', {
-            timeZone: 'Asia/Jakarta', hour: '2-digit', minute: '2-digit', hour12: false
-        });
-    });
+    const timeLabels = data.map(p => new Date(p.timestamp).toLocaleString('en-GB', {
+        timeZone: 'Asia/Jakarta', hour: '2-digit', minute: '2-digit', hour12: false
+    }));
 
-    const prices = data.map(p => p.price);
-    const dataMin = Math.min(...prices);
-    const dataMax = Math.max(...prices);
+    const allPrices = data.flatMap(d => [d.high, d.low]);
+    const dataMin = Math.min(...allPrices);
+    const dataMax = Math.max(...allPrices);
     const minPrice = Math.floor(dataMin / 1000) * 1000;
     const maxPrice = Math.ceil(dataMax / 1000) * 1000;
     const priceRange = (maxPrice - minPrice === 0) ? 1000 : maxPrice - minPrice;
@@ -30,19 +29,18 @@ function generateSingleItemChartHtml(itemName, itemSymbol, historyData, colors) 
 
     let candlesticks = '';
 
-    for (let i = 1; i < data.length; i++) {
-        const openPrice = data[i - 1].price;
-        const closePrice = data[i].price;
-        const isBullish = closePrice >= openPrice;
+    for (let i = 0; i < data.length; i++) {
+        const d = data[i];
+        const isBullish = d.close >= d.open;
         const color = isBullish ? colors.bullish : colors.bearish;
 
         const x = padding.left + (i / (numDataPoints - 1)) * (chartWidth - padding.left - padding.right) - (candleWidth / 2);
         
-        const wickY1 = padding.top + ((maxPrice - Math.max(openPrice, closePrice)) / priceRange) * (chartHeight - padding.top - padding.bottom);
-        const wickY2 = padding.top + ((maxPrice - Math.min(openPrice, closePrice)) / priceRange) * (chartHeight - padding.top - padding.bottom);
+        const wickY1 = padding.top + ((maxPrice - d.high) / priceRange) * (chartHeight - padding.top - padding.bottom);
+        const wickY2 = padding.top + ((maxPrice - d.low) / priceRange) * (chartHeight - padding.top - padding.bottom);
         
-        const bodyY = padding.top + ((maxPrice - Math.max(openPrice, closePrice)) / priceRange) * (chartHeight - padding.top - padding.bottom);
-        const bodyHeight = (Math.abs(openPrice - closePrice) / priceRange) * (chartHeight - padding.top - padding.bottom);
+        const bodyY = padding.top + ((maxPrice - Math.max(d.open, d.close)) / priceRange) * (chartHeight - padding.top - padding.bottom);
+        const bodyHeight = (Math.abs(d.open - d.close) / priceRange) * (chartHeight - padding.top - padding.bottom);
 
         candlesticks += `<line x1="${x + candleWidth/2}" y1="${wickY1}" x2="${x + candleWidth/2}" y2="${wickY2}" style="stroke:${color}; stroke-width:2;" />`;
         candlesticks += `<rect x="${x}" y="${bodyY}" width="${candleWidth}" height="${Math.max(1, bodyHeight)}" style="fill:${color};" />`;

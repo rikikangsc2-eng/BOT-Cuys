@@ -15,11 +15,13 @@ const qrcode = require('qrcode-terminal');
 
 const handler = require('./handler');
 const config = require('./config');
+const gameConfig = require('./gameConfig');
 const db = require('./lib/database');
 const logger = require('./lib/logger');
 const { getBuffer } = require('./lib/functions');
 const { loadPlugins } = require('./lib/pluginManager');
 const { setConnectionStatus, processQueue, setSocket } = require('./lib/connectionManager');
+const { updateMarket } = require('./lib/marketUpdater');
 
 const sessionPath = path.join(__dirname, 'session');
 let sock;
@@ -55,7 +57,7 @@ function validateAndCleanSession() {
     logger.info('[SESSION] Memvalidasi file sesi...');
     const sessionFiles = fs.readdirSync(sessionPath);
     let filesCleaned = 0;
-
+    
     for (const file of sessionFiles) {
         if (path.extname(file) === '.json') {
             const filePath = path.join(sessionPath, file);
@@ -87,37 +89,6 @@ const formatUptime = (seconds) => {
     return `${pad(hours)}h ${pad(minutes)}m ${pad(secs)}s`;
 };
 
-const updateMarketPrices = () => {
-    let market = db.get('market');
-    let priceHistory = db.get('price_history') || {};
-    const commodities = ['emas', 'iron', 'bara'];
-    const MAX_HISTORY = 24;
-
-    commodities.forEach(item => {
-        const basePrices = { emas: 75000, iron: 25000, bara: 15000 };
-        const volatility = { emas: 0.05, iron: 0.08, bara: 0.12 };
-        const minPrices = { emas: 10000, iron: 5000, bara: 2000 };
-        
-        const oldPrice = market[`${item}_price`] || basePrices[item];
-        market[`last_${item}_price`] = oldPrice;
-        
-        const fluctuationPercent = (Math.random() - 0.5) * 2 * volatility[item];
-        let newPrice = oldPrice * (1 + fluctuationPercent);
-        
-        if (newPrice < minPrices[item]) newPrice = minPrices[item];
-        
-        market[`${item}_price`] = Math.round(newPrice);
-        
-        if (!priceHistory[item]) priceHistory[item] = [];
-        priceHistory[item].push({ timestamp: Date.now(), price: market[`${item}_price`] });
-        if (priceHistory[item].length > MAX_HISTORY) priceHistory[item].shift();
-    });
-
-    db.save('market', market);
-    db.save('price_history', priceHistory);
-    logger.info('[MARKET UPDATE] Harga pasar dan riwayat berhasil diperbarui.');
-};
-
 const handleGroupUpdate = async (sockInstance, event) => {
     try {
         const { id, participants, action } = event;
@@ -129,7 +100,7 @@ const handleGroupUpdate = async (sockInstance, event) => {
         
         const groupMeta = await sockInstance.groupMetadata(id);
         const groupName = groupMeta.subject;
-
+        
         for (const jid of participants) {
             const welcomeText = groupSetting.welcomeMessage.replace(/\$group/g, groupName).replace(/@user/g, `@${jid.split('@')[0]}`);
             
@@ -141,10 +112,10 @@ const handleGroupUpdate = async (sockInstance, event) => {
                 userThumb = null;
                 logger.warn(`Gagal mendapatkan foto profil untuk ${jid}`);
             }
-
-            const messageOptions = { 
-                text: welcomeText, 
-                contextInfo: { 
+            
+            const messageOptions = {
+                text: welcomeText,
+                contextInfo: {
                     mentionedJid: [jid],
                     externalAdReply: userThumb ? {
                         title: config.botName,
@@ -153,7 +124,7 @@ const handleGroupUpdate = async (sockInstance, event) => {
                         sourceUrl: `https://wa.me/${config.ownerNumber}`,
                         mediaType: 1
                     } : null
-                } 
+                }
             };
             
             await sockInstance.sendMessage(id, messageOptions);
@@ -180,10 +151,10 @@ async function connectToWhatsApp() {
     const { version, isLatest } = await fetchLatestBaileysVersion();
     logger.info(`Menggunakan Baileys versi ${version}, isLatest: ${isLatest}`);
     
-    sock = makeWASocket({ 
+    sock = makeWASocket({
         version,
-        auth: state, 
-        browser: Browsers.windows('Chrome'), 
+        auth: state,
+        browser: Browsers.windows('Chrome'),
         logger: pino({ level: 'silent' }),
         printQRInTerminal: !config.botNumber,
         
@@ -194,21 +165,21 @@ async function connectToWhatsApp() {
         connectTimeoutMs: 60_000,
         defaultQueryTimeoutMs: 0,
         keepAliveIntervalMs: 20_000,
-
+        
         getMessage: async (key) => {
             return undefined;
         }
     });
-
+    
     setSocket(sock);
     sock.ev.on('creds.update', saveCreds);
-
+    
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
-
+        
         if (connection === 'connecting') {
             logger.info('Menghubungkan ke WhatsApp...');
-            if(keepAliveInterval) clearInterval(keepAliveInterval);
+            if (keepAliveInterval) clearInterval(keepAliveInterval);
         } else if (qr) {
             if (config.botNumber) {
                 logger.info(`Meminta Kode Pairing untuk nomor ${config.botNumber}...`);
@@ -230,29 +201,29 @@ async function connectToWhatsApp() {
             logger.info(`Terhubung sebagai ${sock.user.name || config.botName}`);
             
             if (priceUpdateInterval) clearInterval(priceUpdateInterval);
-            updateMarketPrices();
-            priceUpdateInterval = setInterval(updateMarketPrices, 5 * 60 * 1000);
+            updateMarket();
+            priceUpdateInterval = setInterval(updateMarket, gameConfig.marketSettings.update_interval_ms);
             
-            if(keepAliveInterval) clearInterval(keepAliveInterval);
+            if (keepAliveInterval) clearInterval(keepAliveInterval);
             keepAliveInterval = setInterval(() => {
                 sock.sendPresenceUpdate('available');
             }, 60 * 1000 * 3);
-
-            processQueue(); 
+            
+            processQueue();
         } else if (connection === 'close') {
             setConnectionStatus(false);
-            if(keepAliveInterval) clearInterval(keepAliveInterval);
+            if (keepAliveInterval) clearInterval(keepAliveInterval);
             
             const error = lastDisconnect?.error;
             const statusCode = new Boom(error)?.output?.statusCode;
             const shouldRetry = statusCode !== DisconnectReason.loggedOut && statusCode !== DisconnectReason.connectionReplaced;
-
+            
             if (shouldRetry) {
                 if (error?.message?.includes('ENOSPC')) {
                     logger.error('[KRITIS] Ruang disk habis (ENOSPC)! Ini akan menyebabkan sesi rusak. Harap bersihkan disk server Anda. Mencoba membersihkan sesi parsial...');
                     cleanPartialSession();
                 }
-
+                
                 retryCount++;
                 if (retryCount <= MAX_RETRIES) {
                     logger.warn(`Koneksi terputus (Kode: ${statusCode}), mencoba koneksi ulang... (Percobaan ${retryCount}/${MAX_RETRIES})`);
@@ -269,7 +240,7 @@ async function connectToWhatsApp() {
             }
         }
     });
-
+    
     sock.ev.on('messages.upsert', async (mek) => {
         try {
             if (mek.type !== 'notify' && mek.type !== 'append') return;
@@ -282,7 +253,7 @@ async function connectToWhatsApp() {
             logger.error(e, 'Error di messages.upsert');
         }
     });
-
+    
     sock.ev.on('group-participants.update', (event) => handleGroupUpdate(sock, event));
     
     return sock;

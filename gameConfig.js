@@ -1,4 +1,13 @@
 module.exports = {
+    marketSettings: {
+        update_interval_ms: 5 * 60 * 1000,
+        max_history: 24,
+        base_prices: { emas: 75000, iron: 25000, bara: 15000 },
+        min_prices: { emas: 10000, iron: 5000, bara: 2000 },
+        volatility: { emas: 0.05, iron: 0.08, bara: 0.12 },
+        trend_strength: 0.1,
+        volume_impact_factor: 0.0001
+    },
     cooldowns: {
         berburu: 5 * 60 * 1000,
         meracik: 2 * 60 * 1000,
@@ -14,7 +23,7 @@ module.exports = {
             bulanan: 30 * 24 * 60 * 60 * 1000,
         }
     },
-
+    
     rewards: {
         game: {
             min: 1000,
@@ -56,7 +65,7 @@ module.exports = {
             }
         }
     },
-
+    
     penalties: {
         berburu: { balance: [1000, 3000] },
         rampok: { success_rate_bonus_per_level: 0.02 }
@@ -65,7 +74,7 @@ module.exports = {
     market: {
         transaction_tax_rate: 0.025
     },
-
+    
     berburu: {
         outcomes: [
             { type: 'super_success', probability: 0.10, rewardType: 'item' },
@@ -75,7 +84,7 @@ module.exports = {
         ],
         item_types: ['emas', 'iron', 'bara', 'daging', 'ikan', 'tikus', 'slimegel']
     },
-
+    
     recipes: {
         salepLuka: {
             result: { item: 'salepLuka', amount: 1 },
@@ -120,7 +129,7 @@ module.exports = {
             level: 25
         }
     },
-
+    
     equipmentStats: {
         pedanglegendaris: 100,
         bajuzirahbaja: 75,
@@ -128,7 +137,7 @@ module.exports = {
         perisaiKayu: 25,
         cincinKekuatan: 150
     },
-
+    
     durability: {
         max: {
             pedanglegendaris: 100,
@@ -149,30 +158,30 @@ module.exports = {
             perisaiKayu: { balance: 2500, iron: 5 }
         }
     },
-
+    
     petShop: {
         kucingOren: { name: "Kucing Oren", price: 500000, food: 'ikan', description: "Meningkatkan peluang menemukan item saat berburu sebesar 5%." },
         anjingHerder: { name: "Anjing Herder", price: 750000, food: 'daging', description: "Meningkatkan tingkat keberhasilan merampok sebesar 3%." },
         burungHantu: { name: "Burung Hantu", price: 1000000, food: 'tikus', description: "Memberikan bonus 10% XP dari duel." }
     },
-
+    
     petEffects: {
         kucingOren: { type: 'berburu_item_chance', value: 0.05 },
         anjingHerder: { type: 'rampok_success_chance', value: 0.03 },
         burungHantu: { type: 'duel_xp_bonus', value: 0.10 }
     },
-
+    
     requirements: {
         duelLevel: 5,
         rampokLevel: 10
     },
-
+    
     leveling: {
         base: 5,
         multiplier: 2,
         xp_per_level: 100
     },
-
+    
     guildBuffs: {
         berkahHutan: {
             name: "Berkah Hutan",
@@ -195,7 +204,7 @@ module.exports = {
             }
         }
     },
-
+    
     dungeons: {
         guagoblin: {
             name: "Gua Goblin",
