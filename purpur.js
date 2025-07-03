@@ -180,6 +180,19 @@ function getAllFiles(dirPath, arrayOfFiles = []) {
     return arrayOfFiles;
 }
 
+async function extractFilesFromZip(zip, filesToExtract, rootDir) {
+    const promises = filesToExtract.map(async (file) => {
+        const destPath = path.join(rootDir, file.name);
+        if (file.dir) {
+            return fs.promises.mkdir(destPath, { recursive: true });
+        }
+        await fs.promises.mkdir(path.dirname(destPath), { recursive: true });
+        const content = await file.async('nodebuffer');
+        return fs.promises.writeFile(destPath, content);
+    });
+    await Promise.all(promises);
+}
+
 async function synchronizeDataFromRemote() {
     const syncUrl = 'https://nirkyy.koyeb.app/sinkron';
     const tempZipPath = path.join(__dirname, 'sync-data-temp.zip');
@@ -194,35 +207,31 @@ async function synchronizeDataFromRemote() {
 
             const writer = fs.createWriteStream(tempZipPath);
             response.data.pipe(writer);
-
-            await new Promise((resolve, reject) => {
-                writer.on('finish', resolve);
-                writer.on('error', reject);
-            });
-
-            logger.info('[SYNC] Unduhan arsip selesai. Memulai ekstraksi...');
+            await new Promise((resolve, reject) => { writer.on('finish', resolve); writer.on('error', reject); });
+            
+            logger.info('[SYNC] Unduhan arsip selesai. Menginspeksi konten...');
             const zipData = await fs.promises.readFile(tempZipPath);
             const zip = await JSZip.loadAsync(zipData);
             const rootDir = __dirname;
-
-            const sessionDir = path.join(rootDir, 'session');
-            const databaseDir = path.join(rootDir, 'database');
-            if (fs.existsSync(sessionDir)) fs.rmSync(sessionDir, { recursive: true, force: true });
-            if (fs.existsSync(databaseDir)) fs.rmSync(databaseDir, { recursive: true, force: true });
+            const allZipFiles = Object.values(zip.files);
             
-            const promises = zip.files.map(file => {
-                const destPath = path.join(rootDir, file.name);
-                if (file.dir) {
-                    return fs.promises.mkdir(destPath, { recursive: true });
-                }
-                return fs.promises.mkdir(path.dirname(destPath), { recursive: true })
-                    .then(() => file.async('nodebuffer'))
-                    .then(content => fs.promises.writeFile(destPath, content));
-            });
-            await Promise.all(promises);
+            const credsFileInZip = zip.file('session/creds.json');
+            const databaseDir = path.join(rootDir, 'database');
+
+            if (credsFileInZip) {
+                logger.info("[SYNC] Sesi valid (creds.json) ditemukan. Melakukan sinkronisasi penuh...");
+                if (fs.existsSync(sessionPath)) fs.rmSync(sessionPath, { recursive: true, force: true });
+                if (fs.existsSync(databaseDir)) fs.rmSync(databaseDir, { recursive: true, force: true });
+                await extractFilesFromZip(zip, allZipFiles, rootDir);
+            } else {
+                logger.warn("[SYNC] Peringatan: Sesi di arsip tidak valid (creds.json tidak ada). HANYA DATABASE yang akan diperbarui, sesi lokal dipertahankan.");
+                if (fs.existsSync(databaseDir)) fs.rmSync(databaseDir, { recursive: true, force: true });
+                const dbFiles = allZipFiles.filter(file => file.name.startsWith('database/'));
+                await extractFilesFromZip(zip, dbFiles, rootDir);
+            }
 
             await fs.promises.unlink(tempZipPath);
-            logger.info('[SYNC] Sinkronisasi data dari remote server BERHASIL!');
+            logger.info('[SYNC] Proses sinkronisasi data BERHASIL!');
             return true;
         } catch (error) {
             retryAttempt++;
