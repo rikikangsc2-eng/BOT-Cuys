@@ -30,7 +30,7 @@ module.exports = {
         return message.reply(stderrMessage);
       }
       
-      const outputMessage = `*Output:*\n\`\`\`${stdout || 'Perintah berhasil dieksekusi tanpa output.'}\`\`\``;
+      const outputMessage = `${stdout || 'Perintah berhasil dieksekusi tanpa output.'}`;
       message.reply(outputMessage);
     });
   }
