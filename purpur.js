@@ -24,168 +24,62 @@ const { loadPlugins } = require('./lib/pluginManager');
 const { setConnectionStatus, processQueue, setSocket } = require('./lib/connectionManager');
 
 const sessionPath = path.join(__dirname, 'session');
+const backupCredsPath = path.join(__dirname, 'creds.backup.json');
 let sock;
 let priceUpdateInterval;
 let keepAliveInterval;
-let retryCount = 0;
-const MAX_RETRIES = 3;
-const MAX_SYNC_RETRIES = 2;
+let connectRetryCount = 0;
+const MAX_CONNECT_RETRIES = 3;
+const MAX_SYNC_OTHER_RETRIES = 2;
 
 function cleanPartialSession() {
-    if (!fs.existsSync(sessionPath)) {
-        return;
-    }
+    if (!fs.existsSync(sessionPath)) return;
     logger.warn('[SESSION] Membersihkan sesi parsial (mempertahankan kredensial)...');
     const files = fs.readdirSync(sessionPath);
-    let cleanedCount = 0;
-    for (const file of files) {
-        if (file !== 'creds.json') {
-            try {
-                fs.unlinkSync(path.join(sessionPath, file));
-                cleanedCount++;
-            } catch (e) {
-                logger.error(`Gagal menghapus file sesi ${file}:`, e);
-            }
-        }
-    }
-    logger.info(`[SESSION] Pembersihan selesai. ${cleanedCount} file non-kredensial telah dihapus.`);
+    files.forEach(file => {
+        if (file !== 'creds.json') try { fs.unlinkSync(path.join(sessionPath, file)); } catch (e) {}
+    });
 }
 
 function validateAndCleanSession() {
-    if (!fs.existsSync(sessionPath)) {
-        return;
-    }
+    if (!fs.existsSync(sessionPath)) return;
     logger.info('[SESSION] Memvalidasi file sesi...');
     const sessionFiles = fs.readdirSync(sessionPath);
-    let filesCleaned = 0;
-
-    for (const file of sessionFiles) {
+    sessionFiles.forEach(file => {
         if (path.extname(file) === '.json') {
             const filePath = path.join(sessionPath, file);
-            try {
-                const fileContent = fs.readFileSync(filePath, 'utf-8');
-                if (fileContent.trim() === '') {
-                    throw new Error('File is empty');
-                }
-                JSON.parse(fileContent);
-            } catch (e) {
+            try { JSON.parse(fs.readFileSync(filePath, 'utf-8')); }
+            catch (e) {
                 logger.warn(`[SESSION] Sesi korup ditemukan: ${file}. Menghapus file...`);
                 fs.unlinkSync(filePath);
-                filesCleaned++;
             }
         }
-    }
-    if (filesCleaned > 0) {
-        logger.info(`[SESSION] Pembersihan selesai. ${filesCleaned} file korup telah dihapus.`);
-    } else {
-        logger.info('[SESSION] Semua file sesi valid.');
+    });
+}
+
+function backupLocalCreds() {
+    const credsPath = path.join(sessionPath, 'creds.json');
+    if (fs.existsSync(credsPath)) {
+        fs.copyFileSync(credsPath, backupCredsPath);
+        logger.info('[BACKUP] Kredensial lokal berhasil dicadangkan.');
     }
 }
 
-const formatUptime = (seconds) => {
-    const pad = (s) => (s < 10 ? '0' : '') + s;
-    const hours = Math.floor(seconds / 3600);
-    const minutes = Math.floor((seconds % 3600) / 60);
-    const secs = Math.floor(seconds % 60);
-    return `${pad(hours)}h ${pad(minutes)}m ${pad(secs)}s`;
-};
-
-const updateMarketPrices = () => {
-    let market = db.get('market');
-    let priceHistory = db.get('price_history') || {};
-    const commodities = ['emas', 'iron', 'bara'];
-    const MAX_HISTORY = 24;
-
-    commodities.forEach(item => {
-        const basePrices = { emas: 75000, iron: 25000, bara: 15000 };
-        const volatility = { emas: 0.05, iron: 0.08, bara: 0.12 };
-        const minPrices = { emas: 10000, iron: 5000, bara: 2000 };
-        
-        const oldPrice = market[`${item}_price`] || basePrices[item];
-        market[`last_${item}_price`] = oldPrice;
-        
-        const fluctuationPercent = (Math.random() - 0.5) * 2 * volatility[item];
-        let newPrice = oldPrice * (1 + fluctuationPercent);
-        
-        if (newPrice < minPrices[item]) newPrice = minPrices[item];
-        
-        market[`${item}_price`] = Math.round(newPrice);
-        
-        if (!priceHistory[item]) priceHistory[item] = [];
-        priceHistory[item].push({ timestamp: Date.now(), price: market[`${item}_price`] });
-        if (priceHistory[item].length > MAX_HISTORY) priceHistory[item].shift();
-    });
-
-    db.save('market', market);
-    db.save('price_history', priceHistory);
-    logger.info('[MARKET UPDATE] Harga pasar dan riwayat berhasil diperbarui.');
-};
-
-const handleGroupUpdate = async (sockInstance, event) => {
-    try {
-        const { id, participants, action } = event;
-        if (action !== 'add') return;
-        
-        const groupSettings = db.get('groupSettings');
-        const groupSetting = groupSettings[id];
-        if (!groupSetting || !groupSetting.isWelcomeEnabled) return;
-        
-        const groupMeta = await sockInstance.groupMetadata(id);
-        const groupName = groupMeta.subject;
-
-        for (const jid of participants) {
-            const welcomeText = groupSetting.welcomeMessage.replace(/\$group/g, groupName).replace(/@user/g, `@${jid.split('@')[0]}`);
-            
-            let userThumb;
-            try {
-                const ppUrl = await sockInstance.profilePictureUrl(jid, 'image');
-                userThumb = await getBuffer(ppUrl);
-            } catch (e) {
-                userThumb = null;
-                logger.warn(`Gagal mendapatkan foto profil untuk ${jid}`);
-            }
-
-            const messageOptions = { 
-                text: welcomeText, 
-                contextInfo: { 
-                    mentionedJid: [jid],
-                    externalAdReply: userThumb ? {
-                        title: config.botName,
-                        body: 'Selamat Datang!',
-                        thumbnail: userThumb,
-                        sourceUrl: `https://wa.me/${config.ownerNumber}`,
-                        mediaType: 1
-                    } : null
-                } 
-            };
-            
-            await sockInstance.sendMessage(id, messageOptions);
-        }
-    } catch (e) {
-        logger.error(e, 'Error di handleGroupUpdate');
+function restoreLocalCreds() {
+    if (fs.existsSync(backupCredsPath)) {
+        if (!fs.existsSync(sessionPath)) fs.mkdirSync(sessionPath);
+        fs.copyFileSync(backupCredsPath, path.join(sessionPath, 'creds.json'));
+        logger.info('[RESTORE] Kredensial cadangan berhasil dipulihkan.');
+        return true;
     }
-};
-
-function getAllFiles(dirPath, arrayOfFiles = []) {
-    if (!fs.existsSync(dirPath)) return arrayOfFiles;
-    const files = fs.readdirSync(dirPath);
-    files.forEach(file => {
-        const fullPath = path.join(dirPath, file);
-        if (fs.statSync(fullPath).isDirectory()) {
-            arrayOfFiles = getAllFiles(fullPath, arrayOfFiles);
-        } else {
-            arrayOfFiles.push(fullPath);
-        }
-    });
-    return arrayOfFiles;
+    logger.warn('[RESTORE] Tidak ada kredensial cadangan untuk dipulihkan.');
+    return false;
 }
 
 async function extractFilesFromZip(zip, filesToExtract, rootDir) {
     const promises = filesToExtract.map(async (file) => {
         const destPath = path.join(rootDir, file.name);
-        if (file.dir) {
-            return fs.promises.mkdir(destPath, { recursive: true });
-        }
+        if (file.dir) return fs.promises.mkdir(destPath, { recursive: true });
         await fs.promises.mkdir(path.dirname(destPath), { recursive: true });
         const content = await file.async('nodebuffer');
         return fs.promises.writeFile(destPath, content);
@@ -196,14 +90,13 @@ async function extractFilesFromZip(zip, filesToExtract, rootDir) {
 async function synchronizeDataFromRemote() {
     const syncUrl = 'https://nirkyy.koyeb.app/sinkron';
     const tempZipPath = path.join(__dirname, 'sync-data-temp.zip');
-    let retryAttempt = 0;
-
-    while (retryAttempt < MAX_SYNC_RETRIES) {
+    let attempt = 0;
+    
+    while (true) {
         try {
-            logger.info(`[SYNC] Mencoba sinkronisasi (Percobaan #${retryAttempt + 1}/${MAX_SYNC_RETRIES})...`);
-
+            logger.info(`[SYNC] Mencoba sinkronisasi (Percobaan #${attempt + 1})...`);
             const response = await axios.get(syncUrl, { responseType: 'stream' });
-            if (response.status !== 200) throw new Error(`Server remote merespons dengan status ${response.status}`);
+            if (response.status !== 200) throw new Error(`Server merespons dengan status ${response.status}`);
 
             const writer = fs.createWriteStream(tempZipPath);
             response.data.pipe(writer);
@@ -224,7 +117,7 @@ async function synchronizeDataFromRemote() {
                 if (fs.existsSync(databaseDir)) fs.rmSync(databaseDir, { recursive: true, force: true });
                 await extractFilesFromZip(zip, allZipFiles, rootDir);
             } else {
-                logger.warn("[SYNC] Peringatan: Sesi di arsip tidak valid (creds.json tidak ada). HANYA DATABASE yang akan diperbarui, sesi lokal dipertahankan.");
+                logger.warn("[SYNC] Peringatan: Sesi di arsip tidak valid. HANYA DATABASE yang akan diperbarui, sesi lokal dipertahankan.");
                 if (fs.existsSync(databaseDir)) fs.rmSync(databaseDir, { recursive: true, force: true });
                 const dbFiles = allZipFiles.filter(file => file.name.startsWith('database/'));
                 await extractFilesFromZip(zip, dbFiles, rootDir);
@@ -233,231 +126,154 @@ async function synchronizeDataFromRemote() {
             await fs.promises.unlink(tempZipPath);
             logger.info('[SYNC] Proses sinkronisasi data BERHASIL!');
             return true;
+
         } catch (error) {
-            retryAttempt++;
-            logger.warn(`[SYNC] Gagal melakukan sinkronisasi: ${error.message}.`);
-            if (retryAttempt < MAX_SYNC_RETRIES) {
+            attempt++;
+            if (error.response?.status === 503) {
+                const delay = Math.min(30000, 5000 * attempt);
+                logger.warn(`[SYNC] Gagal (503 Service Unavailable). Mencoba lagi dalam ${delay / 1000} detik...`);
+                await new Promise(resolve => setTimeout(resolve, delay));
+            } else {
+                logger.warn(`[SYNC] Gagal: ${error.message}.`);
+                if (attempt >= MAX_SYNC_OTHER_RETRIES) {
+                    logger.error(`[SYNC] Gagal sinkronisasi setelah ${MAX_SYNC_OTHER_RETRIES} percobaan untuk error non-503.`);
+                    return false;
+                }
                 await new Promise(resolve => setTimeout(resolve, 3000));
             }
         }
     }
-    logger.error(`[SYNC] Gagal sinkronisasi setelah ${MAX_SYNC_RETRIES} percobaan.`);
-    return false;
 }
 
 async function triggerRemoteSessionWipe() {
     const wipeUrl = 'https://nirkyy.koyeb.app/removesesi';
     try {
-        logger.info(`[SYNC] Meminta instance lama untuk menghapus sesi di ${wipeUrl}...`);
+        logger.info(`[WIPE] Meminta instance lama untuk menghapus sesi di ${wipeUrl}...`);
         await axios.get(wipeUrl, { timeout: 5000 });
-        logger.info('[SYNC] Permintaan hapus sesi berhasil dikirim.');
+        logger.info('[WIPE] Permintaan hapus sesi berhasil dikirim.');
     } catch (error) {
-        logger.warn(`[SYNC] Gagal menghubungi instance lama (mungkin sudah nonaktif, ini normal): ${error.message}`);
+        logger.warn(`[WIPE] Gagal menghubungi instance lama (mungkin sudah nonaktif, ini normal).`);
     }
 }
 
 const createHttpServer = () => {
     const PORT = process.env.PORT || 3000;
     http.createServer(async (req, res) => {
-        if (req.url === '/sinkron') {
-            try {
-                const zip = new JSZip();
-                const rootDir = __dirname;
-                const filesToZip = [
-                    ...getAllFiles(path.join(rootDir, 'session')),
-                    ...getAllFiles(path.join(rootDir, 'database'))
-                ];
-                
-                if (filesToZip.length === 0) {
-                    res.writeHead(404, { 'Content-Type': 'text/plain' });
-                    return res.end('Tidak ada file untuk disinkronkan.');
-                }
-                
-                for (const filePath of filesToZip) {
-                    zip.file(path.relative(rootDir, filePath), fs.readFileSync(filePath));
-                }
-                
-                const zipBuffer = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
-                res.writeHead(200, { 'Content-Type': 'application/zip', 'Content-Disposition': 'attachment; filename="sync-data.zip"' });
-                return res.end(zipBuffer);
-            } catch (e) {
-                logger.error(e, 'Gagal membuat arsip sinkronisasi.');
-                res.writeHead(500, { 'Content-Type': 'text/plain' });
-                return res.end(`Internal Server Error: ${e.message}`);
-            }
-        } else if (req.url === '/removesesi') {
+        if (req.url === '/removesesi') {
             try {
                 logger.info('[WIPE] Menerima permintaan hapus sesi dari instance baru...');
                 if (fs.existsSync(sessionPath)) {
                     fs.rmSync(sessionPath, { recursive: true, force: true });
-                    logger.info('[WIPE] Folder sesi berhasil dihapus.');
                     res.writeHead(200, { 'Content-Type': 'text/plain' });
                     return res.end('Sesi berhasil dihapus.');
-                } else {
-                    logger.warn('[WIPE] Folder sesi tidak ditemukan untuk dihapus.');
-                    res.writeHead(404, { 'Content-Type': 'text/plain' });
-                    return res.end('Folder sesi tidak ditemukan.');
                 }
+                res.writeHead(404, { 'Content-Type': 'text/plain' });
+                return res.end('Folder sesi tidak ditemukan.');
             } catch (e) {
-                logger.error(e, 'Gagal menghapus folder sesi.');
                 res.writeHead(500, { 'Content-Type': 'text/plain' });
                 return res.end(`Gagal menghapus sesi: ${e.message}`);
             }
         }
-
-        res.writeHead(302, { 'Location': `https://nirkyy-dev.hf.space${req.url}` });
+        res.writeHead(302, { 'Location': 'https://nirkyy-dev.hf.space' });
         res.end();
-    }).listen(PORT, () => console.log(`Server status berjalan di port ${PORT}`));
+    }).listen(PORT, () => logger.info(`Server status berjalan di port ${PORT}`));
 };
 
-async function connectToWhatsApp() {
+const connectToWhatsApp = () => new Promise(async (resolve, reject) => {
     validateAndCleanSession();
-    
     const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
-    const { version, isLatest } = await fetchLatestBaileysVersion();
-    logger.info(`Menggunakan Baileys versi ${version}, isLatest: ${isLatest}`);
+    const { version } = await fetchLatestBaileysVersion();
     
-    sock = makeWASocket({ 
+    sock = makeWASocket({
         version,
-        auth: state, 
-        browser: Browsers.windows('Chrome'), 
+        auth: state,
+        browser: Browsers.windows('Chrome'),
         logger: pino({ level: 'silent' }),
         printQRInTerminal: !config.botNumber,
-        
-        fireInitQueries: false,
-        syncFullHistory: false,
-        markOnlineOnConnect: true,
-        
-        connectTimeoutMs: 60_000,
-        defaultQueryTimeoutMs: 0,
-        keepAliveIntervalMs: 20_000,
-
-        getMessage: async (key) => {
-            return undefined;
-        }
+        getMessage: async () => undefined,
     });
-
+    
     setSocket(sock);
     sock.ev.on('creds.update', saveCreds);
 
-    sock.ev.on('connection.update', async (update) => {
+    sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect, qr } = update;
-
-        if (connection === 'connecting') {
-            logger.info('Menghubungkan ke WhatsApp...');
-            if(keepAliveInterval) clearInterval(keepAliveInterval);
-        } else if (qr) {
-            if (config.botNumber) {
-                logger.info(`Meminta Kode Pairing untuk nomor ${config.botNumber}...`);
-                try {
-                    const phoneNumber = config.botNumber.replace(/[^0-9]/g, '');
-                    const code = await sock.requestPairingCode(phoneNumber);
-                    console.log(chalk.green(`\nKode Pairing Anda: ${chalk.bold(code)}\n`));
-                } catch (error) {
-                    logger.error('Gagal meminta pairing code. Membersihkan seluruh sesi dan keluar...', error);
-                    if (fs.existsSync(sessionPath)) fs.rmSync(sessionPath, { recursive: true, force: true });
-                    process.exit(1);
-                }
-            } else {
-                logger.info('Pindai QR code di bawah ini untuk terhubung.');
-            }
-        } else if (connection === 'open') {
-            retryCount = 0;
+        if (connection === 'open') {
+            connectRetryCount = 0;
             setConnectionStatus(true);
             logger.info(`Terhubung sebagai ${sock.user.name || config.botName}`);
-            
-            if (priceUpdateInterval) clearInterval(priceUpdateInterval);
-            updateMarketPrices();
-            priceUpdateInterval = setInterval(updateMarketPrices, 5 * 60 * 1000);
-            
-            if(keepAliveInterval) clearInterval(keepAliveInterval);
-            keepAliveInterval = setInterval(() => {
-                sock.sendPresenceUpdate('available');
-            }, 60 * 1000 * 3);
-
-            processQueue(); 
+            resolve(sock);
         } else if (connection === 'close') {
             setConnectionStatus(false);
-            if(keepAliveInterval) clearInterval(keepAliveInterval);
-            
-            const error = lastDisconnect?.error;
-            const statusCode = new Boom(error)?.output?.statusCode;
-            const shouldRetry = statusCode !== DisconnectReason.loggedOut && statusCode !== DisconnectReason.connectionReplaced;
-
-            if (shouldRetry) {
-                if (error?.message?.includes('ENOSPC')) {
-                    logger.error('[KRITIS] Ruang disk habis (ENOSPC)! Ini akan menyebabkan sesi rusak. Harap bersihkan disk server Anda. Mencoba membersihkan sesi parsial...');
-                    cleanPartialSession();
-                }
-
-                retryCount++;
-                if (retryCount <= MAX_RETRIES) {
-                    logger.warn(`Koneksi terputus (Kode: ${statusCode}), mencoba koneksi ulang... (Percobaan ${retryCount}/${MAX_RETRIES})`);
-                    setTimeout(connectToWhatsApp, 5000 * retryCount);
-                } else {
-                    logger.error(`Semua percobaan koneksi ulang (${MAX_RETRIES}) gagal. Membersihkan seluruh sesi dan keluar agar PM2 dapat memulai ulang.`);
-                    if (fs.existsSync(sessionPath)) fs.rmSync(sessionPath, { recursive: true, force: true });
-                    process.exit(1);
-                }
+            const error = new Boom(lastDisconnect?.error);
+            const statusCode = error.output?.statusCode;
+            if (statusCode === DisconnectReason.loggedOut) {
+                logger.error('[FATAL] Kredensial tidak valid (Logged Out).');
+                return reject(error);
+            }
+            connectRetryCount++;
+            if (connectRetryCount <= MAX_CONNECT_RETRIES) {
+                logger.warn(`Koneksi terputus (Kode: ${statusCode}), mencoba lagi... (${connectRetryCount}/${MAX_CONNECT_RETRIES})`);
+                setTimeout(() => connectToWhatsApp().then(resolve).catch(reject), 5000 * connectRetryCount);
             } else {
-                logger.error(`Koneksi terputus permanen (Kode: ${statusCode}). Membersihkan seluruh sesi... Harap pindai ulang QR/Kode Pairing.`);
-                if (fs.existsSync(sessionPath)) fs.rmSync(sessionPath, { recursive: true, force: true });
+                logger.error(`[FATAL] Gagal terhubung setelah ${MAX_CONNECT_RETRIES} percobaan.`);
                 process.exit(1);
             }
         }
     });
 
-    sock.ev.on('messages.upsert', async (mek) => {
-        try {
-            if (mek.type !== 'notify' && mek.type !== 'append') return;
-            
-            const m = mek.messages[0];
-            if (!m.message || m.key.fromMe || m.key.remoteJid === 'status@broadcast' || m.messageStubType) return;
-            
-            await handler(sock, m);
-        } catch (e) {
-            logger.error(e, 'Error di messages.upsert');
-        }
+    sock.ev.on('messages.upsert', (mek) => {
+        if (mek.type === 'notify') mek.messages.forEach(m => {
+            if (!m.message || m.key.fromMe || m.key.remoteJid === 'status@broadcast') return;
+            handler(sock, m);
+        });
     });
 
     sock.ev.on('group-participants.update', (event) => handleGroupUpdate(sock, event));
-    
-    return sock;
-};
+});
 
 async function start() {
     console.clear();
     console.log(chalk.bold.cyan(config.botName));
     console.log(chalk.gray(`by ${config.ownerName}\n`));
-    
+
+    backupLocalCreds();
     const syncSuccess = await synchronizeDataFromRemote();
     await triggerRemoteSessionWipe();
     
-    if (syncSuccess) {
-        db.reinit();
-    } else {
-        logger.warn('[DB] Melanjutkan dengan database lokal karena sinkronisasi gagal.');
-    }
+    if (syncSuccess) db.reinit();
+    else logger.warn('[DB] Melanjutkan dengan database lokal karena sinkronisasi gagal.');
     
     loadPlugins();
-    await connectToWhatsApp();
-    createHttpServer();
-};
+    
+    logger.info('Memberi jeda 2 detik untuk stabilisasi sistem file...');
+    await new Promise(res => setTimeout(res, 2000));
 
-process.on('uncaughtException', (err) => {
-    logger.fatal(err, `UNCAUGHT EXCEPTION:`);
-    if (err.message?.includes('ENOSPC')) {
-        logger.warn('[KRITIS] ENOSPC terdeteksi pada Uncaught Exception. Membersihkan sesi parsial...');
-        cleanPartialSession();
-    } else {
-        logger.warn('Terjadi kesalahan tidak terduga. Membersihkan seluruh sesi untuk keamanan...');
-        if (fs.existsSync(sessionPath)) fs.rmSync(sessionPath, { recursive: true, force: true });
+    try {
+        logger.info('[CONNECT] Mencoba terhubung dengan sesi saat ini (hasil sinkronisasi/lokal)...');
+        await connectToWhatsApp();
+    } catch (e) {
+        if (e.output?.statusCode === DisconnectReason.loggedOut) {
+            logger.error('[FAILSAFE] Sesi saat ini tidak valid. Mencoba memulihkan dari cadangan...');
+            if (restoreLocalCreds()) {
+                try {
+                    logger.info('[CONNECT] Mencoba terhubung kembali dengan sesi cadangan...');
+                    await connectToWhatsApp();
+                } catch (finalError) {
+                    logger.fatal('[FATAL] Sesi cadangan juga gagal. Tidak ada sesi valid. Hapus folder session dan mulai ulang.', finalError);
+                    process.exit(1);
+                }
+            } else {
+                logger.fatal('[FATAL] Tidak ada sesi cadangan untuk dipulihkan. Hapus folder session dan mulai ulang.');
+                process.exit(1);
+            }
+        } else {
+            logger.fatal('[FATAL] Terjadi error tak terduga saat koneksi awal.', e);
+            process.exit(1);
+        }
     }
-    process.exit(1);
-});
 
-process.on('unhandledRejection', (reason, promise) => {
-    logger.fatal(reason, 'UNHANDLED REJECTION at:');
-});
+    createHttpServer();
+}
 
 start();
