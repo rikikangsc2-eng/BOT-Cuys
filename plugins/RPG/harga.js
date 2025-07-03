@@ -10,7 +10,7 @@ function generateSingleItemChartHtml(itemName, itemSymbol, historyData, colors) 
         .slice(-numDataPoints);
 
     if (data.length < 2) {
-        return `<html><body style="background-color: #0d1117; color: #c9d1d9; display:flex; align-items:center; justify-content:center; height:100%;"><h1>Data pasar tidak cukup untuk ${itemName}.</h1></body></html>`;
+        return `<html><body><h1>Error: Not enough data for chart generation.</h1></body></html>`;
     }
     
     const timeLabels = data.map(p => new Date(p.timestamp).toLocaleString('en-GB', {
@@ -111,6 +111,11 @@ module.exports = {
             const market = db.get('market');
             const priceHistory = db.get('price_history');
             const itemHistory = priceHistory[itemKey];
+
+            if (!itemHistory || itemHistory.length < 2) {
+                const intervalMinutes = gameConfig.marketSettings.update_interval_ms / 60000;
+                return message.reply(`📈 Data pasar untuk *${selectedItem.name}* sedang dikumpulkan. Grafik akan tersedia setelah minimal 2 siklus data tercatat.\n\nCoba lagi dalam beberapa menit. Harga diperbarui setiap ${intervalMinutes} menit.`);
+            }
 
             const htmlContent = generateSingleItemChartHtml(selectedItem.name, selectedItem.symbol, itemHistory, selectedItem.colors);
 
