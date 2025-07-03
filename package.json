@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "main": "index.js",
   "dependencies": {
+    "express":"*",
     "@hapi/boom": "^10.0.1",
     "@whiskeysockets/baileys": "npm:baileys@latest",
     "better-sqlite3": "^11.10.0",
